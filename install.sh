@@ -155,21 +155,17 @@ app.disable('x-powered-by');
 const server = http.createServer(app);
 
 // -------------------- Security headers --------------------
-// NOTE: CSP is kept disabled (like your original) because your UI uses inline scripts + CDN.
-// Removing this would break UI unless you move assets locally & remove inline.
 app.use(helmet({
   contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false,
   crossOriginOpenerPolicy: false
 }));
 
-// Prevent MIME sniffing
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   next();
 });
 
-// Body parser limits
 app.use(express.json({ limit: '10kb' }));
 
 // -------------------- Paths --------------------
@@ -184,7 +180,7 @@ const MESSAGES_FILE = path.join(DATA_DIR, 'messages.json');
 const CHANNELS_FILE = path.join(DATA_DIR, 'channels.json');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 
-// NEW storage (conversation-based)
+// conversation storage (kept, but we will key conversations by channelName for compatibility)
 const CONVERSATIONS_FILE = path.join(DATA_DIR, 'conversations.json');
 const MEMBERSHIPS_FILE   = path.join(DATA_DIR, 'memberships.json');
 const ATTACHMENTS_FILE   = path.join(DATA_DIR, 'attachments.json');
@@ -208,13 +204,13 @@ function atomicWriteJson(file, obj, mode = 0o600) {
 // -------------------- Config --------------------
 let appConfig = {
   adminUser: 'admin',
-  adminPassHash: '', // hashed
+  adminPassHash: '',
   port: 3000,
   maxFileSizeMB: 50,
   appName: 'node-socketio-chatroom',
   hideUserList: false,
-  allowedOrigins: '*', // or comma-separated string in config
-  protectUploads: false // اگر true شود دانلود فقط با توکن ممکن است
+  allowedOrigins: '*',
+  protectUploads: true
 };
 
 function normalizeOrigins(val) {
@@ -231,20 +227,16 @@ function loadAndSecureConfig() {
     let saveNeeded = false;
     const fileConfig = readJsonSafe(CONFIG_FILE, null);
 
-    if (fileConfig) {
-      appConfig = { ...appConfig, ...fileConfig };
-    } else {
-      saveNeeded = true;
-    }
+    if (fileConfig) appConfig = { ...appConfig, ...fileConfig };
+    else saveNeeded = true;
 
-    // Backward compat: if older config had adminPass (plaintext), migrate it to hash
+    // migrate plaintext adminPass -> hash
     if (appConfig.adminPass && !appConfig.adminPassHash) {
       appConfig.adminPassHash = bcrypt.hashSync(String(appConfig.adminPass), 12);
       delete appConfig.adminPass;
       saveNeeded = true;
     }
 
-    // If adminPassHash mistakenly plaintext, re-hash
     if (appConfig.adminPassHash && !String(appConfig.adminPassHash).startsWith('$2')) {
       appConfig.adminPassHash = bcrypt.hashSync(String(appConfig.adminPassHash), 12);
       saveNeeded = true;
@@ -252,35 +244,31 @@ function loadAndSecureConfig() {
 
     appConfig.allowedOrigins = normalizeOrigins(appConfig.allowedOrigins);
 
-    if (saveNeeded) {
-      atomicWriteJson(CONFIG_FILE, appConfig, 0o600);
-    }
+    if (saveNeeded) atomicWriteJson(CONFIG_FILE, appConfig, 0o600);
   } catch (e) {
-    console.error("Error loading config:", e);
+    console.error('Error loading config:', e);
   }
 }
 
 loadAndSecureConfig();
 const PORT = Number(process.env.PORT || appConfig.port || 3000);
 
-// -------------------- Socket.io (CORS hardened, but feature-preserving) --------------------
+// -------------------- Socket.io --------------------
 const corsOption = (() => {
   const origins = appConfig.allowedOrigins;
-  if (origins === '*') {
-    return { origin: '*', methods: ["GET", "POST"] };
-  }
+  if (origins === '*') return { origin: '*', methods: ['GET', 'POST'] };
+
   return {
     origin: (origin, cb) => {
-      // Some clients may have no origin; you can decide block/allow.
       if (!origin) return cb(null, true);
       return origins.includes(origin) ? cb(null, true) : cb(null, false);
     },
-    methods: ["GET", "POST"]
+    methods: ['GET', 'POST']
   };
 })();
 
 const io = new Server(server, {
-  maxHttpBufferSize: 1e8, // kept as your original to not break audio/base64 feature
+  maxHttpBufferSize: 1e8,
   cors: corsOption
 });
 
@@ -288,16 +276,18 @@ const io = new Server(server, {
 let users = {};
 let persistentUsers = {};
 let channels = ['General', 'Random'];
+
+// IMPORTANT: We keep messages keyed by conversationId (which will be channelName)
 let messages = {};
 let userRateLimits = {};
 
-// NEW conversation-based state
-let conversations = {}; // { [id]: {id,type,title,isHidden,createdBy,createdAt,dmKey?} }
-let memberships   = {}; // { [conversationId]: { [username]: {role,joinedAt,lastReadMessageId} } }
-let attachments   = {}; // { [attachmentId]: {id,conversationId,storedFileName,originalFileName,mimetype,size,uploadedBy,createdAt} }
+// conversations/memberships are kept, but keyed by channelName (public) or dmKey (dm)
+let conversations = {};
+let memberships = {};
+let attachments = {};
 
 // upload auth: token -> expiry
-const uploadTokens = new Map(); // token -> { username, exp }
+const uploadTokens = new Map();
 setInterval(() => {
   const now = Date.now();
   for (const [t, v] of uploadTokens.entries()) {
@@ -308,52 +298,116 @@ setInterval(() => {
 // Load data
 persistentUsers = readJsonSafe(USERS_FILE, {});
 channels = readJsonSafe(CHANNELS_FILE, channels);
-messages = readJsonSafe(MESSAGES_FILE, messages);
+messages = readJsonSafe(MESSAGES_FILE, {});
+conversations = readJsonSafe(CONVERSATIONS_FILE, {});
+memberships = readJsonSafe(MEMBERSHIPS_FILE, {});
+attachments = readJsonSafe(ATTACHMENTS_FILE, {});
 
-// NEW
-conversations = readJsonSafe(CONVERSATIONS_FILE, conversations);
-memberships   = readJsonSafe(MEMBERSHIPS_FILE, memberships);
-attachments   = readJsonSafe(ATTACHMENTS_FILE, attachments);
-
-
-// -------------------- User data migration (plaintext -> hash) --------------------
-function migrateUsersIfNeeded() {
-  let changed = false;
-  for (const [u, data] of Object.entries(persistentUsers)) {
-    if (!data) continue;
-
-    // old format: { password: 'plain', ... }
-    if (data.password && !data.passHash) {
-      data.passHash = bcrypt.hashSync(String(data.password), 12);
-      delete data.password;
-      changed = true;
-    }
-
-    // if passHash exists but not bcrypt
-    if (data.passHash && !String(data.passHash).startsWith('$2')) {
-      data.passHash = bcrypt.hashSync(String(data.passHash), 12);
-      changed = true;
-    }
-  }
-  if (changed) saveData();
+// -------------------- Helpers --------------------
+function cleanUsername(username) {
+  return xss(String(username || '').trim()).substring(0, 20);
 }
-migrateUsersIfNeeded();
+function cleanText(text, max = 1000) {
+  const s = xss(String(text || ''));
+  return s.length > max ? s.substring(0, max) : s;
+}
+function cleanChannelName(name) {
+  return xss(String(name || '').trim()).substring(0, 30);
+}
+
+function ensureConversationMaps(conversationId) {
+  if (!memberships[conversationId]) memberships[conversationId] = {};
+  if (!messages[conversationId]) messages[conversationId] = [];
+}
+
+function isMember(conversationId, username) {
+  return !!(memberships[conversationId] && memberships[conversationId][username]);
+}
+
+function addMember(conversationId, username, role = 'member') {
+  ensureConversationMaps(conversationId);
+  if (!memberships[conversationId][username]) {
+    memberships[conversationId][username] = { role, joinedAt: Date.now(), lastReadMessageId: null };
+  }
+}
+
+function ensurePublicConversation(channelName, createdBy = 'system') {
+  const id = channelName; // ✅ key by channelName (compat with UI)
+  if (!conversations[id]) {
+    conversations[id] = {
+      id,
+      type: 'public',
+      title: channelName,
+      isHidden: false,
+      createdBy,
+      createdAt: Date.now()
+    };
+  }
+  ensureConversationMaps(id);
+  return conversations[id];
+}
+
+function dmKeyFor(u1, u2) {
+  return ['dm', u1, u2].sort().join(':');
+}
+
+function getOrCreateDMConversation(u1, u2) {
+  const key = dmKeyFor(u1, u2);
+  if (!conversations[key]) {
+    conversations[key] = {
+      id: key,
+      type: 'dm',
+      title: `DM: ${u1}, ${u2}`,
+      isHidden: true,
+      dmKey: key,
+      createdBy: u1,
+      createdAt: Date.now()
+    };
+    ensureConversationMaps(key);
+  }
+  addMember(key, u1, 'owner');
+  addMember(key, u2, 'member');
+  return conversations[key];
+}
 
 function saveData() {
   try {
     atomicWriteJson(USERS_FILE, persistentUsers, 0o600);
     atomicWriteJson(CHANNELS_FILE, channels, 0o600);
     atomicWriteJson(MESSAGES_FILE, messages, 0o600);
-
-    // NEW
     atomicWriteJson(CONVERSATIONS_FILE, conversations, 0o600);
     atomicWriteJson(MEMBERSHIPS_FILE, memberships, 0o600);
     atomicWriteJson(ATTACHMENTS_FILE, attachments, 0o600);
   } catch (e) {
-    console.error("Error saving data", e);
+    console.error('Error saving data', e);
   }
 }
-setInterval(saveData, 30000).unref();
+setInterval(saveData, 30_000).unref();
+
+// migrate users plaintext -> hash (backward compat)
+(function migrateUsersIfNeeded() {
+  let changed = false;
+  for (const [u, data] of Object.entries(persistentUsers)) {
+    if (!data) continue;
+
+    if (data.password && !data.passHash) {
+      data.passHash = bcrypt.hashSync(String(data.password), 12);
+      delete data.password;
+      changed = true;
+    }
+    if (data.passHash && !String(data.passHash).startsWith('$2')) {
+      data.passHash = bcrypt.hashSync(String(data.passHash), 12);
+      changed = true;
+    }
+  }
+  if (changed) saveData();
+})();
+
+// ensure default channels have public conversations
+(function ensureDefaults() {
+  for (const ch of channels) ensurePublicConversation(ch, 'system');
+  saveData();
+})();
 
 // -------------------- Upload --------------------
 const uploadLimiter = rateLimit({
@@ -361,7 +415,7 @@ const uploadLimiter = rateLimit({
   max: 20,
   standardHeaders: true,
   legacyHeaders: false,
-  message: "Too many uploads from this IP, please try again later"
+  message: 'Too many uploads from this IP, please try again later'
 });
 
 const allowedMimes = new Set([
@@ -392,7 +446,7 @@ const storage = multer.diskStorage({
 
 let upload = multer({
   storage,
-  limits: { fileSize: (Number(appConfig.maxFileSizeMB || 50)) * 1024 * 1024 },
+  limits: { fileSize: Number(appConfig.maxFileSizeMB || 50) * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     if (!allowedMimes.has(file.mimetype)) return cb(new Error('DISALLOWED_MIME'));
     if (!safeExt(file.originalname)) return cb(new Error('DISALLOWED_EXT'));
@@ -400,202 +454,49 @@ let upload = multer({
   }
 });
 
-// Protect downloads if enabled (so links need ?t=TOKEN)
+// Protect downloads if enabled
 app.use('/uploads', (req, res, next) => {
-  loadAndSecureConfig(); // keep latest settings
+  loadAndSecureConfig();
   if (!appConfig.protectUploads) return next();
 
   const tok = String(req.query.t || req.headers['x-upload-token'] || '');
   const rec = uploadTokens.get(tok);
-  if (!rec || rec.exp <= Date.now()) {
-    return res.status(401).send('Unauthorized');
-  }
+  if (!rec || rec.exp <= Date.now()) return res.status(401).send('Unauthorized');
   next();
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.post('/upload', uploadLimiter, (req, res) => {
-  // Upload must be authenticated (prevents anonymous disk abuse)
   const tok = String(req.headers['x-upload-token'] || '');
   const rec = uploadTokens.get(tok);
-  if (!rec || rec.exp <= Date.now()) {
-    return res.status(401).json({ error: 'Unauthorized upload.' });
+  if (!rec || rec.exp <= Date.now()) return res.status(401).json({ error: 'Unauthorized upload.' });
+
+  const fresh = readJsonSafe(CONFIG_FILE, null);
+  if (fresh && fresh.maxFileSizeMB) {
+    upload = multer({
+      storage,
+      limits: { fileSize: Number(fresh.maxFileSizeMB) * 1024 * 1024 },
+      fileFilter: (_req, file, cb) => {
+        if (!allowedMimes.has(file.mimetype)) return cb(new Error('DISALLOWED_MIME'));
+        if (!safeExt(file.originalname)) return cb(new Error('DISALLOWED_EXT'));
+        cb(null, true);
+      }
+    });
   }
 
-  // Reload config to get latest file size limit (feature kept)
-  try {
-    const fresh = readJsonSafe(CONFIG_FILE, null);
-    if (fresh && fresh.maxFileSizeMB) {
-      upload = multer({
-        storage,
-        limits: { fileSize: Number(fresh.maxFileSizeMB) * 1024 * 1024 },
-        fileFilter: (_req, file, cb) => {
-          if (!allowedMimes.has(file.mimetype)) return cb(new Error('DISALLOWED_MIME'));
-          if (!safeExt(file.originalname)) return cb(new Error('DISALLOWED_EXT'));
-          cb(null, true);
-        }
-      });
-    }
-  } catch {}
-
   const uploadSingle = upload.single('file');
-
   uploadSingle(req, res, function (err) {
-    if (err instanceof multer.MulterError) {
-      return res.status(400).json({ error: 'File too large or upload error.' });
-    } else if (err) {
-      return res.status(400).json({ error: 'File type not allowed.' });
-    }
-
+    if (err instanceof multer.MulterError) return res.status(400).json({ error: 'File too large or upload error.' });
+    if (err) return res.status(400).json({ error: 'File type not allowed.' });
     if (!req.file) return res.status(400).json({ error: 'No file sent.' });
 
-    // sanitize original name
     const cleanOriginal = xss(String(req.file.originalname || '')).substring(0, 120);
-
-    res.json({
-      url: '/uploads/' + req.file.filename,
-      filename: cleanOriginal,
-      size: req.file.size,
-      mimetype: req.file.mimetype
-    });
+    res.json({ url: '/uploads/' + req.file.filename, filename: cleanOriginal, size: req.file.size, mimetype: req.file.mimetype });
   });
 });
 
-// -------------------- Helpers --------------------
-function cleanUsername(username) {
-  return xss(String(username || '').trim()).substring(0, 20);
-}
-function cleanText(text, max = 1000) {
-  const s = xss(String(text || ''));
-  return s.length > max ? s.substring(0, max) : s;
-}
-
-/** ✅ FIX: این تابع لازم است چون پایین‌تر joinChannel از آن استفاده می‌کند */
-function cleanChannelName(name) {
-  return xss(String(name || '').trim()).substring(0, 30);
-}
-
-function newId(bytes = 12) {
-  return crypto.randomBytes(bytes).toString('hex');
-}
-
-function ensureConversationMaps(conversationId) {
-  if (!memberships[conversationId]) memberships[conversationId] = {};
-  if (!messages[conversationId]) messages[conversationId] = [];
-}
-
-function isMember(conversationId, username) {
-  return !!(memberships[conversationId] && memberships[conversationId][username]);
-}
-
-function addMember(conversationId, username, role = 'member') {
-  ensureConversationMaps(conversationId);
-  if (!memberships[conversationId][username]) {
-    memberships[conversationId][username] = {
-      role,
-      joinedAt: Date.now(),
-      lastReadMessageId: null
-    };
-  }
-}
-
-function dmKeyFor(u1, u2) {
-  return [u1, u2].sort().join(':');
-}
-
-function getOrCreateDMConversation(u1, u2) {
-  const key = dmKeyFor(u1, u2);
-  const existing = Object.values(conversations).find(c => c && c.type === 'dm' && c.dmKey === key);
-  if (existing) {
-    ensureConversationMaps(existing.id);
-    addMember(existing.id, u1, memberships[existing.id]?.[u1]?.role || 'member');
-    addMember(existing.id, u2, memberships[existing.id]?.[u2]?.role || 'member');
-    return existing;
-  }
-
-  const id = newId();
-  const conv = {
-    id,
-    type: 'dm',
-    title: `DM: ${u1}, ${u2}`,
-    isHidden: true,
-    dmKey: key,
-    createdBy: u1,
-    createdAt: Date.now()
-  };
-  conversations[id] = conv;
-  ensureConversationMaps(id);
-  addMember(id, u1, 'owner');
-  addMember(id, u2, 'member');
-  saveData();
-  return conv;
-}
-
-function ensureDefaultPublicConversations() {
-  const hasAny = Object.keys(conversations).length > 0;
-  if (hasAny) return;
-
-  const generalId = newId();
-  const randomId = newId();
-
-  conversations[generalId] = {
-    id: generalId, type: 'public', title: 'General',
-    isHidden: false, createdBy: 'system', createdAt: Date.now()
-  };
-  conversations[randomId] = {
-    id: randomId, type: 'public', title: 'Random',
-    isHidden: false, createdBy: 'system', createdAt: Date.now()
-  };
-
-  ensureConversationMaps(generalId);
-  ensureConversationMaps(randomId);
-  saveData();
-}
-
-function requireMembershipOrPublic(socket, conversationId) {
-  const user = users[socket.id];
-  if (!user) return { ok: false, error: 'Unauthorized' };
-
-  const conv = conversations[conversationId];
-  if (!conv) return { ok: false, error: 'Conversation not found' };
-
-  if (conv.type === 'public') {
-    if (!isMember(conversationId, user.username)) addMember(conversationId, user.username, 'member');
-    return { ok: true, conv, user };
-  }
-
-  if (!isMember(conversationId, user.username)) {
-    return { ok: false, error: 'Forbidden' };
-  }
-  return { ok: true, conv, user };
-}
-
-function joinConversation(socket, conversationId) {
-  const check = requireMembershipOrPublic(socket, conversationId);
-  if (!check.ok) return socket.emit('error', check.error);
-
-  socket.join(conversationId);
-  socket.emit('conversation_joined', {
-    id: conversationId,
-    type: check.conv.type,
-    title: check.conv.title,
-    isHidden: !!check.conv.isHidden
-  });
-
-  // keep behavior: send full history (like old "history")
-  // (اگر pagination خواستی بعداً اضافه می‌کنم بدون بهم‌زدن UI)
-  socket.emit('history', messages[conversationId] ? messages[conversationId] : []);
-}
-
-function joinChannel(socket, channel, isPrivate = false) {
-  if (!users[socket.id]) return;
-  const cleanChannel = cleanChannelName(channel);
-  socket.join(cleanChannel);
-  socket.emit('channel_joined', { name: cleanChannel, isPrivate });
-  socket.emit('history', messages[cleanChannel] ? messages[cleanChannel] : []);
-}
-
+// -------------------- Online users list --------------------
 function getUniqueOnlineUsers() {
   const unique = {};
   Object.values(users).forEach(u => { unique[u.username] = u; });
@@ -610,9 +511,8 @@ function broadcastUserList() {
     const user = users[socket.id];
     if (!user) return;
 
-    if (user.role === 'admin') {
-      socket.emit('user_list', allUsers);
-    } else {
+    if (user.role === 'admin') socket.emit('user_list', allUsers);
+    else {
       if (appConfig.hideUserList) {
         const visible = [...admins];
         if (!visible.find(a => a.username === user.username)) visible.push(user);
@@ -628,67 +528,53 @@ function getBannedUsers() {
   return Object.keys(persistentUsers).filter(u => persistentUsers[u]?.isBanned);
 }
 
-// -------------------- Socket events (features preserved) --------------------
+// -------------------- Socket events --------------------
 io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
-
   socket.on('login', ({ username, password }) => {
-    loadAndSecureConfig(); // keep latest settings
+    loadAndSecureConfig();
 
     const u = cleanUsername(username);
     const p = String(password || '');
-
     if (!u || !p) return socket.emit('login_error', 'نام کاربری و رمز عبور الزامی است');
 
-    // Check Admin
+    // Admin login
     if (u === appConfig.adminUser) {
       const ok = appConfig.adminPassHash && bcrypt.compareSync(p, appConfig.adminPassHash);
-        if (ok) {
-        users[socket.id] = { username: u, role: 'admin' };
+      if (!ok) return socket.emit('login_error', 'رمز عبور ادمین اشتباه است.');
 
-        const uploadToken = crypto.randomBytes(24).toString('hex');
-        uploadTokens.set(uploadToken, { username: u, exp: Date.now() + 6 * 60 * 60 * 1000 }); // 6h
+      users[socket.id] = { username: u, role: 'admin' };
 
-        ensureDefaultPublicConversations();
+      const uploadToken = crypto.randomBytes(24).toString('hex');
+      uploadTokens.set(uploadToken, { username: u, exp: Date.now() + 6 * 60 * 60 * 1000 });
 
-        socket.emit('login_success', {
-            username: u,
-            role: 'admin',
-            channels,
-            conversations: Object.values(conversations).map(c => ({
-              id: c.id, type: c.type, title: c.title, isHidden: !!c.isHidden
-            })),
-            settings: {
-            maxFileSizeMB: appConfig.maxFileSizeMB,
-            appName: appConfig.appName,
-            hideUserList: appConfig.hideUserList
-            },
-            uploadToken
-        });
+      // Ensure public conversations for channels
+      for (const ch of channels) ensurePublicConversation(ch, 'system');
 
-        const general = Object.values(conversations).find(c => c && c.type === 'public' && c.title === 'General');
-        if (general) joinConversation(socket, general.id);
-        broadcastUserList();
-        return;
-        } else {
-        return socket.emit('login_error', 'رمز عبور ادمین اشتباه است.');
-        }
+      socket.emit('login_success', {
+        username: u,
+        role: 'admin',
+        channels,
+        settings: {
+          maxFileSizeMB: appConfig.maxFileSizeMB,
+          appName: appConfig.appName,
+          hideUserList: appConfig.hideUserList
+        },
+        uploadToken
+      });
+
+      // auto-join General
+      const general = ensurePublicConversation('General', 'system');
+      joinChannelCompat(socket, general.id);
+
+      broadcastUserList();
+      return;
     }
 
-    // Users (hashed)
+    // Normal user login/register
     const existing = persistentUsers[u];
-
     if (existing) {
       if (existing.isBanned) return socket.emit('login_error', 'حساب کاربری شما مسدود شده است.');
-      // Backward compat: if had plaintext password somehow, migrate
-      if (existing.password && !existing.passHash) {
-        existing.passHash = bcrypt.hashSync(String(existing.password), 12);
-        delete existing.password;
-        saveData();
-      }
-      if (!existing.passHash || !bcrypt.compareSync(p, existing.passHash)) {
-        return socket.emit('login_error', 'رمز عبور اشتباه است.');
-      }
+      if (!existing.passHash || !bcrypt.compareSync(p, existing.passHash)) return socket.emit('login_error', 'رمز عبور اشتباه است.');
     } else {
       persistentUsers[u] = {
         passHash: bcrypt.hashSync(p, 12),
@@ -705,33 +591,44 @@ io.on('connection', (socket) => {
     users[socket.id] = { username: u, role };
 
     const uploadToken = crypto.randomBytes(24).toString('hex');
-    uploadTokens.set(uploadToken, { username: u, exp: Date.now() + 6 * 60 * 60 * 1000 }); // 6h
+    uploadTokens.set(uploadToken, { username: u, exp: Date.now() + 6 * 60 * 60 * 1000 });
 
-    ensureDefaultPublicConversations();
+    for (const ch of channels) ensurePublicConversation(ch, 'system');
 
     socket.emit('login_success', {
-    username: u,
-    role,
-    channels,
-    conversations: Object.values(conversations).map(c => ({
-      id: c.id, type: c.type, title: c.title, isHidden: !!c.isHidden
-    })),
-    settings: {
+      username: u,
+      role,
+      channels,
+      settings: {
         maxFileSizeMB: appConfig.maxFileSizeMB,
         appName: appConfig.appName,
         hideUserList: appConfig.hideUserList
-    },
-    uploadToken
+      },
+      uploadToken
     });
 
-    const general = Object.values(conversations).find(c => c && c.type === 'public' && c.title === 'General');
-    if (general) joinConversation(socket, general.id);
+    joinChannelCompat(socket, 'General');
     broadcastUserList();
   });
 
+  // ✅ Compatibility: treat channelName as conversationId and room name
+  function joinChannelCompat(sock, channelName) {
+    const user = users[sock.id];
+    if (!user) return;
+
+    const clean = cleanChannelName(channelName);
+    if (!clean) return;
+
+    ensurePublicConversation(clean, 'system');
+    addMember(clean, user.username, 'member');
+
+    sock.join(clean);
+    sock.emit('channel_joined', { name: clean, isPrivate: false });
+    sock.emit('history', Array.isArray(messages[clean]) ? messages[clean] : []);
+  }
+
   socket.on('join_channel', (channel) => {
-    if (!users[socket.id]) return;
-    joinChannel(socket, channel);
+    joinChannelCompat(socket, channel);
   });
 
   socket.on('join_private', (targetUser) => {
@@ -743,34 +640,44 @@ io.on('connection', (socket) => {
 
     const dm = getOrCreateDMConversation(currentUser.username, cleanTarget);
 
-    // join as conversation room (stable id)
-    joinConversation(socket, dm.id);
+    socket.join(dm.id);
+    socket.emit('channel_joined', { name: dm.id, isPrivate: true });
+    socket.emit('history', Array.isArray(messages[dm.id]) ? messages[dm.id] : []);
   });
 
+  // ✅ create channel + ensure conversation exists
   socket.on('create_channel', (channelName) => {
     const user = users[socket.id];
-    if (user && (user.role === 'admin' || user.role === 'vip')) {
-      const cleanName = xss(String(channelName || '')).substring(0, 30);
-      if (!channels.includes(cleanName) && cleanName.length > 0) {
-        channels.push(cleanName);
-        io.emit('update_channels', channels);
-        saveData();
-      }
-    }
+    if (!user || (user.role !== 'admin' && user.role !== 'vip')) return;
+
+    const clean = cleanChannelName(channelName);
+    if (!clean) return;
+
+    if (!channels.includes(clean)) channels.push(clean);
+    ensurePublicConversation(clean, user.username);
+
+    io.emit('update_channels', channels);
+    saveData();
   });
 
+  // ✅ delete channel + cleanup all related data
   socket.on('delete_channel', (channelName) => {
     const user = users[socket.id];
-    if (user && (user.role === 'admin' || user.role === 'vip')) {
-      const cleanName = xss(String(channelName || '')).substring(0, 30);
-      if (cleanName !== 'General' && channels.includes(cleanName)) {
-        channels = channels.filter(c => c !== cleanName);
-        delete messages[cleanName];
-        io.emit('update_channels', channels);
-        io.in(cleanName).socketsLeave(cleanName);
-        saveData();
-      }
-    }
+    if (!user || (user.role !== 'admin' && user.role !== 'vip')) return;
+
+    const clean = cleanChannelName(channelName);
+    if (!clean || clean === 'General') return;
+
+    channels = channels.filter(c => c !== clean);
+
+    delete conversations[clean];
+    delete memberships[clean];
+    delete messages[clean];
+
+    io.in(clean).socketsLeave(clean);
+
+    io.emit('update_channels', channels);
+    saveData();
   });
 
   socket.on('update_admin_settings', (newSettings) => {
@@ -791,29 +698,27 @@ io.on('connection', (socket) => {
     if (targetUsername === appConfig.adminUser) return;
 
     const t = cleanUsername(targetUsername);
-    if (persistentUsers[t]) {
-      persistentUsers[t].isBanned = true;
+    if (!persistentUsers[t]) return;
 
-      // Wipe History (feature preserved)
-      for (const ch in messages) {
-        if (Array.isArray(messages[ch])) {
-          messages[ch] = messages[ch].filter(m => m.sender !== t);
-        }
-      }
+    persistentUsers[t].isBanned = true;
 
-      saveData();
-      io.emit('bulk_delete_user', t);
-
-      const targetSockets = Object.keys(users).filter(id => users[id].username === t);
-      targetSockets.forEach(id => {
-        io.to(id).emit('force_disconnect', 'شما توسط ادمین بن شدید.');
-        io.sockets.sockets.get(id)?.disconnect(true);
-        delete users[id];
-      });
-
-      broadcastUserList();
-      socket.emit('action_success', `کاربر ${t} بن شد و پیام‌های او حذف گردید.`);
+    // wipe messages across all rooms
+    for (const key of Object.keys(messages)) {
+      if (Array.isArray(messages[key])) messages[key] = messages[key].filter(m => m.sender !== t);
     }
+
+    saveData();
+    io.emit('bulk_delete_user', t);
+
+    const targetSockets = Object.keys(users).filter(id => users[id].username === t);
+    targetSockets.forEach(id => {
+      io.to(id).emit('force_disconnect', 'شما توسط ادمین بن شدید.');
+      io.sockets.sockets.get(id)?.disconnect(true);
+      delete users[id];
+    });
+
+    broadcastUserList();
+    socket.emit('action_success', `کاربر ${t} بن شد و پیام‌های او حذف گردید.`);
   });
 
   socket.on('unban_user', (targetUsername) => {
@@ -860,66 +765,46 @@ io.on('connection', (socket) => {
     const user = users[socket.id];
     if (!user) return;
 
-    // Rate limit (feature preserved)
     const now = Date.now();
     if (!userRateLimits[user.username]) userRateLimits[user.username] = { count: 0, last: now };
-    if (now - userRateLimits[user.username].last > 5000) {
-      userRateLimits[user.username] = { count: 0, last: now };
-    }
-    if (userRateLimits[user.username].count > 5) {
-      return socket.emit('error', 'لطفا آهسته‌تر پیام ارسال کنید.');
-    }
+    if (now - userRateLimits[user.username].last > 5000) userRateLimits[user.username] = { count: 0, last: now };
+    if (userRateLimits[user.username].count > 5) return socket.emit('error', 'لطفا آهسته‌تر پیام ارسال کنید.');
     userRateLimits[user.username].count++;
 
-    const conversationId = String(data?.conversationId || '');
+    const conversationId = cleanChannelName(data?.conversationId || '');
     if (!conversationId) return;
 
-    const check = requireMembershipOrPublic(socket, conversationId);
-    if (!check.ok) return socket.emit('error', check.error);
+    // ✅ ensure conversation exists for channel-based rooms
+    if (!conversations[conversationId]) ensurePublicConversation(conversationId, 'system');
 
     const cleanTextVal = cleanText(data?.text, 1000);
     const cleanFileName = data?.fileName ? xss(String(data.fileName)).substring(0, 120) : undefined;
-
     const type = String(data?.type || 'text');
     const content = data?.content;
 
-    // hard caps to avoid disk/memory abuse (base64 is huge)
-    if (type === 'audio' && typeof content === 'string' && content.length > 2_500_000) {
-    return socket.emit('error', 'فایل صوتی خیلی بزرگ است.');
-    }
-    if (type === 'image' && typeof content === 'string' && content.length > 3_500_000) {
-    return socket.emit('error', 'تصویر خیلی بزرگ است.');
-    }
-    if (type === 'video' && typeof content === 'string' && content.length > 5_000_000) {
-    return socket.emit('error', 'ویدیو خیلی بزرگ است.');
-    }
+    if (type === 'audio' && typeof content === 'string' && content.length > 2_500_000) return socket.emit('error', 'فایل صوتی خیلی بزرگ است.');
+    if (type === 'image' && typeof content === 'string' && content.length > 3_500_000) return socket.emit('error', 'تصویر خیلی بزرگ است.');
+    if (type === 'video' && typeof content === 'string' && content.length > 5_000_000) return socket.emit('error', 'ویدیو خیلی بزرگ است.');
 
     const msg = {
       id: crypto.randomBytes(12).toString('hex'),
       sender: user.username,
       text: cleanTextVal,
       type,
-      content, // kept (audio base64, etc.) with caps
+      content,
       fileName: cleanFileName,
-
       conversationId,
-      channel: conversationId, // ✅ FIX: برای سازگاری با UI فعلی (که msg.channel را چک می‌کند)
-
+      channel: conversationId, // ✅ UI compatibility
       replyTo: data?.replyTo || null,
       timestamp: new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }),
       role: user.role
     };
 
     ensureConversationMaps(conversationId);
-
-    if (!messages[conversationId]) messages[conversationId] = [];
     messages[conversationId].push(msg);
     if (messages[conversationId].length > 100) messages[conversationId].shift();
 
     io.to(conversationId).emit('receive_message', msg);
-
-    // PV hack حذف شد: دیگر لازم نیست چون DM هم room خودش را دارد
-
     saveData();
   });
 
@@ -931,13 +816,13 @@ io.on('connection', (socket) => {
     if (!id) return;
 
     let found = false;
-    for (const ch in messages) {
-      if (!Array.isArray(messages[ch])) continue;
-      const idx = messages[ch].findIndex(m => m.id === id);
+    for (const key of Object.keys(messages)) {
+      if (!Array.isArray(messages[key])) continue;
+      const idx = messages[key].findIndex(m => m.id === id);
       if (idx !== -1) {
-        messages[ch].splice(idx, 1);
+        messages[key].splice(idx, 1);
         found = true;
-        io.emit('message_deleted', { channel: ch, id });
+        io.emit('message_deleted', { channel: key, id });
         break;
       }
     }
@@ -949,9 +834,7 @@ io.on('connection', (socket) => {
     if (!query || String(query).length > 20) return;
 
     const cleanQuery = xss(String(query)).toLowerCase();
-    const matches = Object.keys(persistentUsers)
-      .filter(u => u.toLowerCase().includes(cleanQuery))
-      .slice(0, 30);
+    const matches = Object.keys(persistentUsers).filter(u => u.toLowerCase().includes(cleanQuery)).slice(0, 30);
     socket.emit('search_results', matches);
   });
 
@@ -1796,8 +1679,9 @@ echo "[5/6] Installing project dependencies..."
 "$NPM_BIN" install
 
 echo "[6/6] Starting server with PM2..."
-pm2 delete "$APP_NAME_VAL" 2>/dev/null || true
-PORT="$PORT" pm2 start server.js --name "$APP_NAME_VAL"
+PM2_NAME="HyperSentry"
+pm2 delete "$PM2_NAME" 2>/dev/null || true
+PORT="$PORT" pm2 start server.js --name "$PM2_NAME"
 pm2 save
 
 echo "Creating management tool..."
@@ -1806,7 +1690,7 @@ cat << 'EOF_MENU' > /tmp/node-socketio-chatroom-menu.sh
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-APP_NAME="__APP_NAME__"
+APP_NAME="HyperSentry"
 DIR="__DIR__"
 CONFIG_FILE="$DIR/data/config.json"
 INDEX_FILE="$DIR/public/index.html"
@@ -1894,7 +1778,6 @@ done
 EOF_MENU
 
 # Fill placeholders safely (فایل درست همونیه که ساختی)
-sed -i "s|__APP_NAME__|$APP_NAME_VAL|g" /tmp/node-socketio-chatroom-menu.sh
 sed -i "s|__DIR__|$DIR|g" /tmp/node-socketio-chatroom-menu.sh
 
 sudo mv /tmp/node-socketio-chatroom-menu.sh /usr/local/bin/node-socketio-chatroom
