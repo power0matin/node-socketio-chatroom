@@ -1,5 +1,3 @@
-## ✅ Professional README (copy/paste as `README.md`)
-
 # Node Socket.IO Chatroom (Hardened) — Real-time Multi-Room Chat
 
 [![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
