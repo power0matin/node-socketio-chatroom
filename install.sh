@@ -70,7 +70,20 @@ if ! command -v node >/dev/null 2>&1; then
   curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
   sudo apt-get install -y nodejs
 fi
-sudo npm install -g pm2
+
+# اطمینان از وجود npm و اینکه sudo هم پیداش می‌کنه
+if ! command -v npm >/dev/null 2>&1; then
+  # بعضی سیستم‌ها npm جدا نصب می‌شود
+  sudo apt-get install -y npm
+fi
+
+# sudo ممکنه PATH محدود داشته باشه، پس PATH فعلی را پاس می‌دهیم
+sudo env PATH="$PATH" npm install -g pm2
+
+# چک سریع (اختیاری ولی مفید)
+node -v
+npm -v
+pm2 -v
 
 echo "[3/6] Creating project files in $DIR_DEFAULT..."
 DIR="$DIR_DEFAULT"
@@ -1586,12 +1599,10 @@ EOF
 # in place of __PASTE_YOUR_EXISTING_INDEX_HTML_HERE__ (exactly as you have it).
 # (I didn't alter UI to avoid breaking anything.)
 
-ADMIN_PASS_HASH="$(node -e "const bcrypt=require('bcryptjs');process.stdout.write(bcrypt.hashSync(process.env.P,12));" P="$ADMIN_PASS")"
-
 cat > data/config.json <<EOF
 {
   "adminUser": "$(echo "$ADMIN_USER" | sed 's/"/\\"/g')",
-  "adminPassHash": "$(echo "$ADMIN_PASS_HASH" | sed 's/"/\\"/g')",
+  "adminPass": "$(echo "$ADMIN_PASS" | sed 's/"/\\"/g')",
   "port": $PORT,
   "maxFileSizeMB": 50,
   "appName": "$(echo "$APP_NAME_VAL" | sed 's/"/\\"/g')",
@@ -1601,7 +1612,6 @@ cat > data/config.json <<EOF
 }
 EOF
 chmod 600 data/config.json
-unset ADMIN_PASS_HASH
 
 echo "[4/6] Applying configuration..."
 # Replace placeholders if they exist in your index.html
@@ -1711,9 +1721,9 @@ while true; do
 done
 EOF_MENU
 
-# Fill placeholders safely
-sed -i "s|__APP_NAME__|$APP_NAME_VAL|g" /tmp/chat-menu.sh
-sed -i "s|__DIR__|$DIR|g" /tmp/chat-menu.sh
+# Fill placeholders safely (فایل درست همونیه که ساختی)
+sed -i "s|__APP_NAME__|$APP_NAME_VAL|g" /tmp/node-socketio-chatroom-menu.sh
+sed -i "s|__DIR__|$DIR|g" /tmp/node-socketio-chatroom-menu.sh
 
 sudo mv /tmp/node-socketio-chatroom-menu.sh /usr/local/bin/node-socketio-chatroom
 sudo chmod +x /usr/local/bin/node-socketio-chatroom
