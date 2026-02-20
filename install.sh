@@ -159,7 +159,8 @@ const server = http.createServer(app);
 // Removing this would break UI unless you move assets locally & remove inline.
 app.use(helmet({
   contentSecurityPolicy: false,
-  crossOriginEmbedderPolicy: false
+  crossOriginEmbedderPolicy: false,
+  crossOriginOpenerPolicy: false
 }));
 
 // Prevent MIME sniffing
@@ -469,6 +470,12 @@ function cleanText(text, max = 1000) {
   const s = xss(String(text || ''));
   return s.length > max ? s.substring(0, max) : s;
 }
+
+/** ✅ FIX: این تابع لازم است چون پایین‌تر joinChannel از آن استفاده می‌کند */
+function cleanChannelName(name) {
+  return xss(String(name || '').trim()).substring(0, 30);
+}
+
 function newId(bytes = 12) {
   return crypto.randomBytes(bytes).toString('hex');
 }
@@ -888,16 +895,19 @@ io.on('connection', (socket) => {
     }
 
     const msg = {
-    id: crypto.randomBytes(12).toString('hex'),
-    sender: user.username,
-    text: cleanTextVal,
-    type,
-    content, // kept (audio base64, etc.) with caps
-    fileName: cleanFileName,
-    conversationId,
-    replyTo: data?.replyTo || null,
-    timestamp: new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }),
-    role: user.role
+      id: crypto.randomBytes(12).toString('hex'),
+      sender: user.username,
+      text: cleanTextVal,
+      type,
+      content, // kept (audio base64, etc.) with caps
+      fileName: cleanFileName,
+
+      conversationId,
+      channel: conversationId, // ✅ FIX: برای سازگاری با UI فعلی (که msg.channel را چک می‌کند)
+
+      replyTo: data?.replyTo || null,
+      timestamp: new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }),
+      role: user.role
     };
 
     ensureConversationMaps(conversationId);
@@ -1899,7 +1909,8 @@ echo "Your Admin Credentials:"
 echo "User: $ADMIN_USER"
 echo "Pass: will be stored hashed after first server start"
 echo ""
-echo "Access URL: http://$(curl -s ifconfig.me):$PORT"
+IP="$(curl -fsS https://api.ipify.org 2>/dev/null || curl -fsS https://ifconfig.co 2>/dev/null || echo 'YOUR_SERVER_IP')"
+echo "Access URL: http://$IP:$PORT"
 echo ""
 echo "Type 'node-socketio-chatroom' in terminal to manage your server."
 echo "========================================"
