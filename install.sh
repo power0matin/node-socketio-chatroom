@@ -183,6 +183,11 @@ const MESSAGES_FILE = path.join(DATA_DIR, 'messages.json');
 const CHANNELS_FILE = path.join(DATA_DIR, 'channels.json');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 
+// NEW storage (conversation-based)
+const CONVERSATIONS_FILE = path.join(DATA_DIR, 'conversations.json');
+const MEMBERSHIPS_FILE   = path.join(DATA_DIR, 'memberships.json');
+const ATTACHMENTS_FILE   = path.join(DATA_DIR, 'attachments.json');
+
 function readJsonSafe(file, fallback) {
   try {
     if (!fs.existsSync(file)) return fallback;
@@ -285,6 +290,11 @@ let channels = ['General', 'Random'];
 let messages = {};
 let userRateLimits = {};
 
+// NEW conversation-based state
+let conversations = {}; // { [id]: {id,type,title,isHidden,createdBy,createdAt,dmKey?} }
+let memberships   = {}; // { [conversationId]: { [username]: {role,joinedAt,lastReadMessageId} } }
+let attachments   = {}; // { [attachmentId]: {id,conversationId,storedFileName,originalFileName,mimetype,size,uploadedBy,createdAt} }
+
 // upload auth: token -> expiry
 const uploadTokens = new Map(); // token -> { username, exp }
 setInterval(() => {
@@ -298,6 +308,11 @@ setInterval(() => {
 persistentUsers = readJsonSafe(USERS_FILE, {});
 channels = readJsonSafe(CHANNELS_FILE, channels);
 messages = readJsonSafe(MESSAGES_FILE, messages);
+
+// NEW
+conversations = readJsonSafe(CONVERSATIONS_FILE, conversations);
+memberships   = readJsonSafe(MEMBERSHIPS_FILE, memberships);
+attachments   = readJsonSafe(ATTACHMENTS_FILE, attachments);
 
 
 // -------------------- User data migration (plaintext -> hash) --------------------
@@ -328,6 +343,11 @@ function saveData() {
     atomicWriteJson(USERS_FILE, persistentUsers, 0o600);
     atomicWriteJson(CHANNELS_FILE, channels, 0o600);
     atomicWriteJson(MESSAGES_FILE, messages, 0o600);
+
+    // NEW
+    atomicWriteJson(CONVERSATIONS_FILE, conversations, 0o600);
+    atomicWriteJson(MEMBERSHIPS_FILE, memberships, 0o600);
+    atomicWriteJson(ATTACHMENTS_FILE, attachments, 0o600);
   } catch (e) {
     console.error("Error saving data", e);
   }
@@ -449,8 +469,116 @@ function cleanText(text, max = 1000) {
   const s = xss(String(text || ''));
   return s.length > max ? s.substring(0, max) : s;
 }
-function cleanChannelName(ch) {
-  return xss(String(ch || '')).substring(0, 60);
+function newId(bytes = 12) {
+  return crypto.randomBytes(bytes).toString('hex');
+}
+
+function ensureConversationMaps(conversationId) {
+  if (!memberships[conversationId]) memberships[conversationId] = {};
+  if (!messages[conversationId]) messages[conversationId] = [];
+}
+
+function isMember(conversationId, username) {
+  return !!(memberships[conversationId] && memberships[conversationId][username]);
+}
+
+function addMember(conversationId, username, role = 'member') {
+  ensureConversationMaps(conversationId);
+  if (!memberships[conversationId][username]) {
+    memberships[conversationId][username] = {
+      role,
+      joinedAt: Date.now(),
+      lastReadMessageId: null
+    };
+  }
+}
+
+function dmKeyFor(u1, u2) {
+  return [u1, u2].sort().join(':');
+}
+
+function getOrCreateDMConversation(u1, u2) {
+  const key = dmKeyFor(u1, u2);
+  const existing = Object.values(conversations).find(c => c && c.type === 'dm' && c.dmKey === key);
+  if (existing) {
+    ensureConversationMaps(existing.id);
+    addMember(existing.id, u1, memberships[existing.id]?.[u1]?.role || 'member');
+    addMember(existing.id, u2, memberships[existing.id]?.[u2]?.role || 'member');
+    return existing;
+  }
+
+  const id = newId();
+  const conv = {
+    id,
+    type: 'dm',
+    title: `DM: ${u1}, ${u2}`,
+    isHidden: true,
+    dmKey: key,
+    createdBy: u1,
+    createdAt: Date.now()
+  };
+  conversations[id] = conv;
+  ensureConversationMaps(id);
+  addMember(id, u1, 'owner');
+  addMember(id, u2, 'member');
+  saveData();
+  return conv;
+}
+
+function ensureDefaultPublicConversations() {
+  const hasAny = Object.keys(conversations).length > 0;
+  if (hasAny) return;
+
+  const generalId = newId();
+  const randomId = newId();
+
+  conversations[generalId] = {
+    id: generalId, type: 'public', title: 'General',
+    isHidden: false, createdBy: 'system', createdAt: Date.now()
+  };
+  conversations[randomId] = {
+    id: randomId, type: 'public', title: 'Random',
+    isHidden: false, createdBy: 'system', createdAt: Date.now()
+  };
+
+  ensureConversationMaps(generalId);
+  ensureConversationMaps(randomId);
+  saveData();
+}
+
+function requireMembershipOrPublic(socket, conversationId) {
+  const user = users[socket.id];
+  if (!user) return { ok: false, error: 'Unauthorized' };
+
+  const conv = conversations[conversationId];
+  if (!conv) return { ok: false, error: 'Conversation not found' };
+
+  if (conv.type === 'public') {
+    if (!isMember(conversationId, user.username)) addMember(conversationId, user.username, 'member');
+    return { ok: true, conv, user };
+  }
+
+  if (!isMember(conversationId, user.username)) {
+    return { ok: false, error: 'Forbidden' };
+  }
+  return { ok: true, conv, user };
+}
+
+function joinConversation(socket, conversationId) {
+  const check = requireMembershipOrPublic(socket, conversationId);
+  if (!check.ok) return socket.emit('error', check.error);
+
+  socket.join(conversationId);
+  socket.emit('conversation_joined', {
+    id: conversationId,
+    type: check.conv.type,
+    title: check.conv.title,
+    isHidden: !!check.conv.isHidden
+  });
+
+  // keep behavior: send full history (like old "history")
+  // (اگر pagination خواستی بعداً اضافه می‌کنم بدون بهم‌زدن UI)
+  socket.emit('history', messages[conversationId] ? messages[conversationId] : []);
 }
 
 function joinChannel(socket, channel, isPrivate = false) {
@@ -514,10 +642,15 @@ io.on('connection', (socket) => {
         const uploadToken = crypto.randomBytes(24).toString('hex');
         uploadTokens.set(uploadToken, { username: u, exp: Date.now() + 6 * 60 * 60 * 1000 }); // 6h
 
+        ensureDefaultPublicConversations();
+
         socket.emit('login_success', {
             username: u,
             role: 'admin',
             channels,
+            conversations: Object.values(conversations).map(c => ({
+              id: c.id, type: c.type, title: c.title, isHidden: !!c.isHidden
+            })),
             settings: {
             maxFileSizeMB: appConfig.maxFileSizeMB,
             appName: appConfig.appName,
@@ -526,7 +659,8 @@ io.on('connection', (socket) => {
             uploadToken
         });
 
-        joinChannel(socket, 'General');
+        const general = Object.values(conversations).find(c => c && c.type === 'public' && c.title === 'General');
+        if (general) joinConversation(socket, general.id);
         broadcastUserList();
         return;
         } else {
@@ -566,10 +700,15 @@ io.on('connection', (socket) => {
     const uploadToken = crypto.randomBytes(24).toString('hex');
     uploadTokens.set(uploadToken, { username: u, exp: Date.now() + 6 * 60 * 60 * 1000 }); // 6h
 
+    ensureDefaultPublicConversations();
+
     socket.emit('login_success', {
     username: u,
     role,
     channels,
+    conversations: Object.values(conversations).map(c => ({
+      id: c.id, type: c.type, title: c.title, isHidden: !!c.isHidden
+    })),
     settings: {
         maxFileSizeMB: appConfig.maxFileSizeMB,
         appName: appConfig.appName,
@@ -578,7 +717,8 @@ io.on('connection', (socket) => {
     uploadToken
     });
 
-    joinChannel(socket, 'General');
+    const general = Object.values(conversations).find(c => c && c.type === 'public' && c.title === 'General');
+    if (general) joinConversation(socket, general.id);
     broadcastUserList();
   });
 
@@ -592,9 +732,12 @@ io.on('connection', (socket) => {
     if (!currentUser) return;
 
     const cleanTarget = cleanUsername(targetUser);
-    // same behavior as your original PV naming (feature preserved)
-    const roomName = [currentUser.username, cleanTarget].sort().join('_pv_');
-    joinChannel(socket, roomName, true);
+    if (!cleanTarget || cleanTarget === currentUser.username) return;
+
+    const dm = getOrCreateDMConversation(currentUser.username, cleanTarget);
+
+    // join as conversation room (stable id)
+    joinConversation(socket, dm.id);
   });
 
   socket.on('create_channel', (channelName) => {
@@ -721,8 +864,11 @@ io.on('connection', (socket) => {
     }
     userRateLimits[user.username].count++;
 
-    const channel = cleanChannelName(data?.channel);
-    if (!channel) return;
+    const conversationId = String(data?.conversationId || '');
+    if (!conversationId) return;
+
+    const check = requireMembershipOrPublic(socket, conversationId);
+    if (!check.ok) return socket.emit('error', check.error);
 
     const cleanTextVal = cleanText(data?.text, 1000);
     const cleanFileName = data?.fileName ? xss(String(data.fileName)).substring(0, 120) : undefined;
@@ -748,32 +894,21 @@ io.on('connection', (socket) => {
     type,
     content, // kept (audio base64, etc.) with caps
     fileName: cleanFileName,
-    channel,
+    conversationId,
     replyTo: data?.replyTo || null,
     timestamp: new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }),
     role: user.role
     };
 
-    if (!messages[channel]) messages[channel] = [];
-    messages[channel].push(msg);
-    if (messages[channel].length > 100) messages[channel].shift();
+    ensureConversationMaps(conversationId);
 
-    io.to(channel).emit('receive_message', msg);
+    if (!messages[conversationId]) messages[conversationId] = [];
+    messages[conversationId].push(msg);
+    if (messages[conversationId].length > 100) messages[conversationId].shift();
 
-    // Manual PV delivery fix (feature preserved)
-    if (channel.includes('_pv_')) {
-      const parts = channel.split('_pv_');
-      const targetUsername = parts.find(u => u !== user.username);
-      if (targetUsername) {
-        const targetSocketId = Object.keys(users).find(id => users[id].username === targetUsername);
-        if (targetSocketId) {
-          const targetSocket = io.sockets.sockets.get(targetSocketId);
-          if (targetSocket && !targetSocket.rooms.has(channel)) {
-            io.to(targetSocketId).emit('receive_message', msg);
-          }
-        }
-      }
-    }
+    io.to(conversationId).emit('receive_message', msg);
+
+    // PV hack حذف شد: دیگر لازم نیست چون DM هم room خودش را دارد
 
     saveData();
   });
@@ -1369,6 +1504,7 @@ cat > public/index.html << 'EOF'
                     text: messageText.value,
                     type: 'text',
                     channel: currentChannel.value,
+                    conversationId: currentChannel.value, // ✅ در این نسخه: currentChannel را به عنوان conversationId استفاده می‌کنیم
                     replyTo: replyingTo.value
                 });
                 messageText.value = '';
@@ -1422,6 +1558,7 @@ cat > public/index.html << 'EOF'
                                 content: securedUrl,
                                 fileName: res.filename,
                                 channel: currentChannel.value,
+                                conversationId: currentChannel.value, // ✅ هم‌راستا با sendMessage
                                 replyTo: replyingTo.value
                                 });
 
@@ -1587,7 +1724,7 @@ cat > public/index.html << 'EOF'
                                 const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
                                 const reader = new FileReader(); reader.readAsDataURL(audioBlob);
                                 reader.onloadend = () => {
-                                    socket.emit('send_message', { text: '', type: 'audio', content: reader.result, channel: currentChannel.value, replyTo: replyingTo.value });
+                                    socket.emit('send_message', { text: '', type: 'audio', content: reader.result, channel: currentChannel.value, conversationId: currentChannel.value, replyTo: replyingTo.value });
                                     replyingTo.value = null;
                                 };
                             };
