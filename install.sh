@@ -73,24 +73,36 @@ if ! command -v node >/dev/null 2>&1; then
   sudo apt-get install -y nodejs
 fi
 
-# پیدا کردن مسیر واقعی npm (ممکنه /usr/bin/npm یا /usr/local/bin/npm باشه)
-NPM_BIN="$(command -v npm || true)"
-
-# اگر npm نبود، نصبش کن (روی بعضی سیستم‌ها لازم میشه)
+# مسیرهای رایج npm + fallback با command -v
+NPM_BIN=""
+for p in /usr/bin/npm /usr/local/bin/npm /bin/npm; do
+  if [[ -x "$p" ]]; then NPM_BIN="$p"; break; fi
+done
 if [[ -z "$NPM_BIN" ]]; then
-  sudo apt-get update -y
-  sudo apt-get install -y nodejs
-  NPM_BIN="$(command -v npm || true)"
+  NPM_BIN="$(command -v npm 2>/dev/null || true)"
 fi
 
-# اگر هنوز نبود، با پیام واضح fail کن (چون ادامه بی‌معنیه)
+# اگر هنوز npm نبود، نصب npm و دوباره تلاش
 if [[ -z "$NPM_BIN" ]]; then
-  echo "ERROR: npm not found even after installation."
-  echo "Try: sudo apt-get install -y nodejs npm"
+  sudo apt-get update -y
+  sudo apt-get install -y npm
+  for p in /usr/bin/npm /usr/local/bin/npm /bin/npm; do
+    if [[ -x "$p" ]]; then NPM_BIN="$p"; break; fi
+  done
+  if [[ -z "$NPM_BIN" ]]; then
+    NPM_BIN="$(command -v npm 2>/dev/null || true)"
+  fi
+fi
+
+# اگر هنوز هم نبود، fail
+if [[ -z "$NPM_BIN" ]]; then
+  echo "ERROR: npm not found (even after installing npm)."
+  echo "Try manually:"
+  echo "  sudo apt-get install -y nodejs npm"
   exit 1
 fi
 
-# نصب pm2 با مسیر دقیق npm (مشکل sudo PATH را دور می‌زند)
+# pm2 را بدون وابستگی به PATH محدود sudo نصب کن
 sudo "$NPM_BIN" install -g pm2
 
 # چک سریع
@@ -1634,7 +1646,7 @@ sed -i "s|__COLOR_DARK__|$C_DARK|g" public/index.html || true
 sed -i "s|__COLOR_LIGHT__|$C_LIGHT|g" public/index.html || true
 
 echo "[5/6] Installing project dependencies..."
-npm install
+"$NPM_BIN" install
 
 echo "[6/6] Starting server with PM2..."
 pm2 delete "$APP_NAME_VAL" 2>/dev/null || true
