@@ -66,23 +66,36 @@ sudo apt-get update -y
 sudo apt-get install -y curl ca-certificates
 
 echo "[2/6] Installing Node.js & PM2..."
+
+# نصب Node.js (NodeSource)
 if ! command -v node >/dev/null 2>&1; then
   curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
   sudo apt-get install -y nodejs
 fi
 
-# اطمینان از وجود npm و اینکه sudo هم پیداش می‌کنه
-if ! command -v npm >/dev/null 2>&1; then
-  # بعضی سیستم‌ها npm جدا نصب می‌شود
-  sudo apt-get install -y npm
+# پیدا کردن مسیر واقعی npm (ممکنه /usr/bin/npm یا /usr/local/bin/npm باشه)
+NPM_BIN="$(command -v npm || true)"
+
+# اگر npm نبود، نصبش کن (روی بعضی سیستم‌ها لازم میشه)
+if [[ -z "$NPM_BIN" ]]; then
+  sudo apt-get update -y
+  sudo apt-get install -y nodejs
+  NPM_BIN="$(command -v npm || true)"
 fi
 
-# sudo ممکنه PATH محدود داشته باشه، پس PATH فعلی را پاس می‌دهیم
-sudo env PATH="$PATH" npm install -g pm2
+# اگر هنوز نبود، با پیام واضح fail کن (چون ادامه بی‌معنیه)
+if [[ -z "$NPM_BIN" ]]; then
+  echo "ERROR: npm not found even after installation."
+  echo "Try: sudo apt-get install -y nodejs npm"
+  exit 1
+fi
 
-# چک سریع (اختیاری ولی مفید)
+# نصب pm2 با مسیر دقیق npm (مشکل sudo PATH را دور می‌زند)
+sudo "$NPM_BIN" install -g pm2
+
+# چک سریع
 node -v
-npm -v
+"$NPM_BIN" -v
 pm2 -v
 
 echo "[3/6] Creating project files in $DIR_DEFAULT..."
