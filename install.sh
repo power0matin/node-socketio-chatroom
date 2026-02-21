@@ -950,62 +950,182 @@ cat > public/index.html << 'EOF'
             --brand-color: __COLOR_DEFAULT__;
             --brand-dark: __COLOR_DARK__;
             --brand-light: __COLOR_LIGHT__;
+
+            --bg-app: #f0f2f5;
+            --bg-chat: #e9dfd6;
+            --panel: #ffffff;
+            --panel-2: #f8fafc;
+
+            --text: #111827;
+            --muted: #6b7280;
+
+            --border: rgba(17, 24, 39, 0.08);
+            --shadow: 0 10px 30px rgba(0,0,0,0.10);
+            --shadow-soft: 0 6px 18px rgba(0,0,0,0.08);
+
+            --radius-xl: 20px;
+            --radius-lg: 14px;
+            --radius-md: 12px;
+
+            --ring: 0 0 0 3px rgba(37, 99, 235, 0.20);
         }
-        body { 
-            font-family: 'Vazirmatn', sans-serif; 
-            background: #f0f2f5; 
+
+        html, body {
+            height: 100%;
+        }
+
+        body {
+            font-family: 'Vazirmatn', sans-serif;
+            background: var(--bg-app);
+            color: var(--text);
             overscroll-behavior-y: none;
-            height: 100vh; 
-            height: 100dvh; 
+            height: 100vh;
+            height: 100dvh;
+            -webkit-tap-highlight-color: transparent;
+            text-rendering: optimizeLegibility;
         }
+
+        .dir-rtl { direction: rtl; }
         .safe-pb { padding-bottom: env(safe-area-inset-bottom); }
-        .msg-bubble { max-width: 85%; position: relative; }
-        ::-webkit-scrollbar { width: 5px; }
-        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
-        
+
+        /* Better focus */
+        :focus-visible {
+            outline: none;
+            box-shadow: var(--ring);
+            border-radius: 10px;
+        }
+
+        /* Scrollbars (subtle) */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-thumb { background: rgba(107,114,128,0.35); border-radius: 999px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(107,114,128,0.55); }
+
+        /* Cards / panels */
+        .panel {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-xl);
+            box-shadow: var(--shadow);
+        }
+
+        .panel-soft {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-xl);
+            box-shadow: var(--shadow-soft);
+        }
+
+        /* Message bubble sizing + readability */
+        .msg-bubble {
+            max-width: min(85%, 720px);
+            position: relative;
+            will-change: transform;
+        }
+
+        /* Context menu: glassy + safer on top of overlays */
         .context-menu {
             position: absolute;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-            padding: 4px;
-            z-index: 100;
-            min-width: 140px;
+            background: rgba(255,255,255,0.92);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-radius: 12px;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.18);
+            padding: 6px;
+            z-index: 120;
+            min-width: 160px;
             overflow: hidden;
-            border: 1px solid #eee;
+            border: 1px solid rgba(0,0,0,0.06);
         }
+
         .unread-badge {
             background-color: #ef4444;
-            color: white;
+            color: #ffffff;
             font-size: 10px;
             height: 18px;
             min-width: 18px;
-            border-radius: 9px;
-            display: flex;
+            border-radius: 999px;
+            display: inline-flex;
             align-items: center;
             justify-content: center;
-            padding: 0 4px;
-            font-weight: bold;
+            padding: 0 6px;
+            font-weight: 800;
+            letter-spacing: 0.2px;
+            box-shadow: 0 6px 14px rgba(239,68,68,0.25);
+        }
+
+        /* Buttons: consistent press feedback */
+        .tap {
+            transition: transform 120ms ease, filter 120ms ease;
+        }
+        .tap:active {
+            transform: scale(0.98);
+            filter: brightness(0.98);
+        }
+
+        /* Improve textarea feel */
+        textarea::placeholder { color: rgba(107,114,128,0.85); }
+
+
+        /* Dark mode (automatic) */
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-app: #0b1220;
+                --bg-chat: #0f1a2b;
+                --panel: rgba(17,24,39,0.85);
+                --panel-2: rgba(17,24,39,0.70);
+                --text: #e5e7eb;
+                --muted: #9ca3af;
+                --border: rgba(255,255,255,0.10);
+                --shadow: 0 18px 40px rgba(0,0,0,0.35);
+                --shadow-soft: 0 10px 28px rgba(0,0,0,0.28);
+                --ring: 0 0 0 3px rgba(147,197,253,0.25);
+            }
+            ::-webkit-scrollbar-thumb { background: rgba(156,163,175,0.28); }
+            ::-webkit-scrollbar-thumb:hover { background: rgba(156,163,175,0.45); }
+            .context-menu {
+                background: rgba(17,24,39,0.88);
+                border: 1px solid rgba(255,255,255,0.10);
+                color: var(--text);
+            }
         }
     </style>
 </head>
-<body class="w-full overflow-hidden flex flex-col text-gray-800">
+<body class="w-full overflow-hidden flex flex-col text-gray-800 dir-rtl">
     <!-- Application Logic remains the same, managed by Vue -->
     <div id="app" class="h-full flex flex-col w-full">
         
         <!-- Login Screen -->
-        <div v-if="!isLoggedIn" class="fixed inset-0 bg-gray-900 bg-opacity-95 flex items-center justify-center z-50 p-4">
-            <div class="bg-white p-6 md:p-8 rounded-2xl shadow-2xl w-full max-w-sm text-center">
-                <div class="w-16 h-16 bg-brand rounded-full mx-auto flex items-center justify-center mb-4 text-white text-2xl">
-                    <i class="fas fa-comments"></i>
-                </div>
-                <h1 class="text-2xl font-bold mb-2 text-brand-dark">{{ appName }}</h1>
-                <p class="text-xs text-gray-500 mb-6">برای ورود یا ثبت نام اطلاعات زیر را وارد کنید</p>
-                <div class="space-y-4">
-                    <input v-model="loginForm.username" @keyup.enter="login" placeholder="نام کاربری" class="w-full p-3 border rounded-xl focus:ring-2 focus:ring-brand outline-none text-center dir-rtl">
-                    <input v-model="loginForm.password" type="password" placeholder="رمز عبور" class="w-full p-3 border rounded-xl focus:ring-2 focus:ring-brand outline-none text-center dir-rtl">
-                    <button @click="login" class="w-full bg-brand text-white py-3 rounded-xl font-bold hover:bg-brand-dark transition shadow-lg shadow-brand/30">ورود / ثبت نام</button>
-                    <p v-if="error" class="text-red-500 text-sm mt-2 bg-red-50 p-2 rounded">{{ error }}</p>
+        <div v-if="!isLoggedIn" class="fixed inset-0 bg-gray-900/90 flex items-center justify-center z-50 p-4">
+            <div class="panel w-full max-w-sm text-center overflow-hidden">
+                <div class="p-6 md:p-8">
+                    <div class="w-16 h-16 bg-brand rounded-2xl mx-auto flex items-center justify-center mb-4 text-white text-2xl shadow-lg shadow-brand/25">
+                        <i class="fas fa-comments"></i>
+                    </div>
+                    <h1 class="text-2xl font-extrabold mb-2 text-brand-dark tracking-tight">{{ appName }}</h1>
+                    <p class="text-xs text-gray-500 mb-6 leading-relaxed">برای ورود یا ثبت نام اطلاعات زیر را وارد کنید</p>
+
+                    <div class="space-y-3">
+                        <input v-model="loginForm.username" @keyup.enter="login" placeholder="نام کاربری" autocomplete="username"
+                               class="w-full p-3 border rounded-xl bg-white/80 focus:ring-2 focus:ring-brand outline-none text-center dir-rtl">
+
+                        <input v-model="loginForm.password" @keyup.enter="login" type="password" placeholder="رمز عبور" autocomplete="current-password"
+                               class="w-full p-3 border rounded-xl bg-white/80 focus:ring-2 focus:ring-brand outline-none text-center dir-rtl">
+
+                        <button @click="login" :disabled="isAuthBusy || !loginForm.username || !loginForm.password"
+                                class="w-full bg-brand text-white py-3 rounded-xl font-extrabold hover:bg-brand-dark transition shadow-lg shadow-brand/25 disabled:opacity-60 disabled:cursor-not-allowed tap">
+                            <span v-if="!isAuthBusy">ورود / ثبت نام</span>
+                            <span v-else class="inline-flex items-center gap-2 justify-center">
+                                <i class="fas fa-circle-notch fa-spin"></i>
+                                در حال اتصال...
+                            </span>
+                        </button>
+
+                        <p v-if="error" class="text-red-600 text-sm mt-2 bg-red-50 p-2 rounded-lg border border-red-100">{{ error }}</p>
+                    </div>
+
+                    <div class="mt-5 text-[11px] text-gray-400 leading-relaxed">
+                        با ورود شما، یک حساب کاربری (در صورت نبود) ساخته می‌شود.
+                    </div>
                 </div>
             </div>
         </div>
@@ -1126,15 +1246,34 @@ cat > public/index.html << 'EOF'
                 <div class="absolute inset-0 opacity-5 pointer-events-none" style="background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAIklEQVQIW2NkQAKrVq36zwjjgzhhYWGMYAEYB8RmROaABADeOQ8CXl/xfgAAAABJRU5ErkJggg==')"></div>
 
                 <!-- Header -->
-                <div class="bg-white p-3 shadow-sm flex items-center gap-3 z-0 shrink-0">
-                    <button class="md:hidden text-gray-500 p-2" @click="showSidebar = true"><i class="fas fa-bars"></i></button>
-                    <div class="flex-1">
-                        <h2 class="font-bold text-gray-800 flex items-center gap-2">
+                <div class="bg-white/90 backdrop-blur-md border-b border-black/5 p-3 flex items-center gap-3 z-20 shrink-0 sticky top-0">
+                    <button class="md:hidden text-gray-600 p-2 rounded-lg hover:bg-black/5 tap" @click="showSidebar = true" aria-label="باز کردن منو">
+                        <i class="fas fa-bars"></i>
+                    </button>
+
+                    <div class="flex-1 min-w-0">
+                        <h2 class="font-extrabold text-gray-900 flex items-center gap-2 truncate">
                             <span v-if="isPrivateChat" class="text-brand"><i class="fas fa-user-lock"></i></span>
                             <span v-else class="text-gray-500"><i class="fas fa-hashtag"></i></span>
-                            {{ displayChannelName }}
+                            <span class="truncate">{{ displayChannelName }}</span>
                         </h2>
+
+                        <div class="mt-0.5 flex items-center gap-2 text-[11px] text-gray-500">
+                            <span :class="isConnected ? 'text-green-600' : 'text-red-600'" class="inline-flex items-center gap-1">
+                                <span class="inline-block w-2 h-2 rounded-full" :class="isConnected ? 'bg-green-500' : 'bg-red-500'"></span>
+                                <span v-if="isConnected">متصل</span>
+                                <span v-else>قطع</span>
+                            </span>
+                            <span class="opacity-60">•</span>
+                            <span class="truncate">برای رفتن به خط جدید: Shift + Enter</span>
+                        </div>
                     </div>
+
+                    <button v-if="showScrollDown" @click="scrollToBottom(true)"
+                            class="w-10 h-10 rounded-full bg-black/5 hover:bg-black/10 text-gray-700 flex items-center justify-center tap"
+                            aria-label="رفتن به آخر گفتگو">
+                        <i class="fas fa-arrow-down"></i>
+                    </button>
                 </div>
                 
                 <!-- Upload Progress -->
@@ -1214,25 +1353,32 @@ cat > public/index.html << 'EOF'
                 </div>
 
                 <!-- Input Area -->
-                <div class="p-2 safe-pb bg-white border-t flex items-end gap-2 z-10 shrink-0">
-                    <div class="flex pb-2">
-                        <button class="w-10 h-10 rounded-full hover:bg-gray-100 text-gray-500 text-lg transition" @click="$refs.fileInput.click()"><i class="fas fa-paperclip"></i></button>
-                        <!-- Accept all files -->
+                <div class="p-2 safe-pb bg-white/90 backdrop-blur-md border-t border-black/5 flex items-end gap-2 z-20 shrink-0">
+                    <div class="flex pb-2 gap-1">
+                        <button class="w-10 h-10 rounded-full hover:bg-black/5 text-gray-600 text-lg transition tap" @click="$refs.fileInput.click()" aria-label="ارسال فایل">
+                            <i class="fas fa-paperclip"></i>
+                        </button>
                         <input ref="fileInput" type="file" class="hidden" @change="handleFileUpload">
-                        
-                        <button @click="toggleRecording" :class="['w-10 h-10 rounded-full transition text-lg', isRecording ? 'text-red-500 bg-red-50 animate-pulse' : 'hover:bg-gray-100 text-gray-500']">
+
+                        <button @click="toggleRecording" :class="['w-10 h-10 rounded-full transition text-lg tap', isRecording ? 'text-red-600 bg-red-50 animate-pulse' : 'hover:bg-black/5 text-gray-600']"
+                                aria-label="ضبط صدا">
                             <i class="fas fa-microphone"></i>
                         </button>
                     </div>
 
-                    <div class="flex-1 bg-gray-100 rounded-2xl flex items-center p-2 border focus-within:ring-1 focus-within:ring-brand focus-within:bg-white transition">
-                        <textarea v-model="messageText" @keydown.enter.prevent="sendMessage" @input="autoResize" ref="textarea"
-                               placeholder="پیام..." 
-                               class="flex-1 bg-transparent outline-none max-h-32 min-h-[40px] resize-none py-2 px-2 text-sm"></textarea>
+                    <div class="flex-1 bg-gray-100/80 rounded-2xl flex items-end p-2 border border-black/5 focus-within:ring-1 focus-within:ring-brand focus-within:bg-white transition">
+                        <textarea v-model="messageText"
+                               @keydown="handleComposerKeydown"
+                               @input="autoResize"
+                               ref="textarea"
+                               placeholder="پیام..."
+                               class="flex-1 bg-transparent outline-none max-h-40 min-h-[44px] resize-none py-2 px-2 text-sm leading-6"></textarea>
                     </div>
-                    
-                    <button @click="sendMessage" 
-                        class="w-12 h-12 rounded-full bg-brand text-white shadow-lg hover:bg-brand-dark transition transform active:scale-95 flex items-center justify-center mb-0.5">
+
+                    <button @click="sendMessage"
+                            :disabled="!canSend"
+                            class="w-12 h-12 rounded-full bg-brand text-white shadow-lg hover:bg-brand-dark transition flex items-center justify-center mb-0.5 disabled:opacity-60 disabled:cursor-not-allowed tap"
+                            aria-label="ارسال">
                         <i class="fas fa-paper-plane text-lg translate-x-[-2px] translate-y-[1px]"></i>
                     </button>
                 </div>
@@ -1367,6 +1513,14 @@ cat > public/index.html << 'EOF'
                 const isRecording = ref(false);
                 const isUploading = ref(false);
                 const uploadProgress = ref(0);
+
+                const isConnected = ref(socket.connected);
+                const isAuthBusy = ref(false);
+                const showScrollDown = ref(false);
+
+                const canSend = computed(() => {
+                    return !!messageText.value.trim() && isConnected.value;
+                });
                 
                 let mediaRecorder = null;
                 let audioChunks = [];
@@ -1391,6 +1545,14 @@ cat > public/index.html << 'EOF'
                     if ('Notification' in window && Notification.permission !== 'granted' && Notification.permission !== 'denied') {
                         Notification.requestPermission();
                     }
+
+                    const c = document.getElementById('messages-container');
+                    if (!c) return;
+
+                    c.addEventListener('scroll', () => {
+                        const isNearBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 150;
+                        showScrollDown.value = !isNearBottom;
+                    }, { passive: true });
                 });
 
                 // --- SMART SCROLL ---
@@ -1431,6 +1593,8 @@ cat > public/index.html << 'EOF'
                         error.value = 'نام کاربری و رمز عبور الزامی است';
                         return;
                     }
+                    error.value = '';
+                    isAuthBusy.value = true;
                     socket.emit('login', loginForm.value);
                     if ('Notification' in window) Notification.requestPermission();
                 };
@@ -1456,7 +1620,7 @@ cat > public/index.html << 'EOF'
                 };
 
                 const sendMessage = () => {
-                if(!messageText.value.trim()) return;
+                if (!canSend.value) return;
                 socket.emit('send_message', {
                     text: messageText.value,
                     type: 'text',
@@ -1467,6 +1631,16 @@ cat > public/index.html << 'EOF'
                 messageText.value = '';
                 replyingTo.value = null;
                 scrollToBottom(true);
+                };
+
+                const handleComposerKeydown = (e) => {
+                    if (e.key !== 'Enter') return;
+
+                    if (e.shiftKey) return; // newline
+                    e.preventDefault();
+
+                    if (!canSend.value) return;
+                    sendMessage();
                 };
                 
                 // --- UPLOAD LOGIC ---
@@ -1568,6 +1742,9 @@ cat > public/index.html << 'EOF'
                 const showContext = (e, msg) => { contextMenu.value = { visible: true, x: e.pageX, y: e.pageY, target: msg, type: 'message' }; };
                 const showUserContext = (e, targetUsername) => { contextMenu.value = { visible: true, x: e.pageX, y: e.pageY, target: targetUsername, type: 'user' }; };
                 
+                socket.on('connect', () => { isConnected.value = true; });
+                socket.on('disconnect', () => { isConnected.value = false; });
+
                 // --- Socket Events ---
                 socket.on('login_success', (data) => {
                     isLoggedIn.value = true;
@@ -1587,8 +1764,9 @@ cat > public/index.html << 'EOF'
                         }
                     }
                     localStorage.setItem('chat_user_name', data.username);
+                    isAuthBusy.value = false;
                 });
-                socket.on('login_error', (msg) => error.value = msg);
+                socket.on('login_error', (msg) => { error.value = msg; isAuthBusy.value = false; });
                 socket.on('force_disconnect', (msg) => { alert(msg); window.location.reload(); });
                 socket.on('channel_joined', (data) => {
                     currentChannel.value = data.name;
@@ -1702,7 +1880,8 @@ cat > public/index.html << 'EOF'
                     isRecording, isUploading, uploadProgress, toggleRecording, viewImage, lightboxImage, autoResize, scrollToMessage,
                     canCreateChannel, canBan, banUser, unbanUser, setRole,
                     showBanModal, openBanList, bannedUsers, unreadCounts, appName,
-                    showAdminSettings, adminSettings, saveAdminSettings, uploadToken
+                    showAdminSettings, adminSettings, saveAdminSettings, uploadToken,
+                    isConnected, isAuthBusy, canSend, handleComposerKeydown, showScrollDown, scrollToBottom
                 };
             }
         }).mount('#app');
