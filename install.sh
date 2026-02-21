@@ -81,12 +81,20 @@ echo "6) Teal"
 read -r -p "Enter number [1-6]: " COLOR_CHOICE
 
 case "${COLOR_CHOICE:-1}" in
-  2) C_DEF="#9333ea"; C_DARK="#7e22ce"; C_LIGHT="#f3e8ff" ;;
-  3) C_DEF="#16a34a"; C_DARK="#15803d"; C_LIGHT="#dcfce7" ;;
-  4) C_DEF="#dc2626"; C_DARK="#b91c1c"; C_LIGHT="#fee2e2" ;;
-  5) C_DEF="#ea580c"; C_DARK="#c2410c"; C_LIGHT="#ffedd5" ;;
-  6) C_DEF="#0d9488"; C_DARK="#0f766e"; C_LIGHT="#ccfbf1" ;;
-  *) C_DEF="#2563eb"; C_DARK="#1d4ed8"; C_LIGHT="#dbeafe" ;;
+  1) # Telegram (Primary: #2AABEE / #0088cc)
+     C_DEF="#2AABEE"; C_DARK="#0088cc"; C_LIGHT="#E0F2FE" ;;
+  2) # WhatsApp (Greens: #25D366 / #128C7E)
+     C_DEF="#25D366"; C_DARK="#128C7E"; C_LIGHT="#DCFCE7" ;;
+  3) # Discord Blurple (#5865F2)
+     C_DEF="#5865F2"; C_DARK="#4752C4"; C_LIGHT="#EEF2FF" ;;
+  4) # Slack Aubergine (#4A154B)
+     C_DEF="#4A154B"; C_DARK="#3D1140"; C_LIGHT="#F3E8FF" ;;
+  5) # Twitter/X Blue (#1DA1F2)
+     C_DEF="#1DA1F2"; C_DARK="#0C8BD9"; C_LIGHT="#E0F2FE" ;;
+  6) # Calm Teal (fallback modern)
+     C_DEF="#0d9488"; C_DARK="#0f766e"; C_LIGHT="#ccfbf1" ;;
+  *) # Default = Telegram (safe)
+     C_DEF="#2AABEE"; C_DARK="#0088cc"; C_LIGHT="#E0F2FE" ;;
 esac
 
 echo ""
@@ -945,152 +953,168 @@ cat > public/index.html << 'EOF'
       }
     </script>
     <style>
-        :root {
-            /* These will be replaced by the setup script */
-            --brand-color: __COLOR_DEFAULT__;
-            --brand-dark: __COLOR_DARK__;
-            --brand-light: __COLOR_LIGHT__;
+  :root {
+    /* Replaced by installer */
+    --brand-color: __COLOR_DEFAULT__;
+    --brand-dark: __COLOR_DARK__;
+    --brand-light: __COLOR_LIGHT__;
 
-            --bg-app: #f0f2f5;
-            --bg-chat: #e9dfd6;
-            --panel: #ffffff;
-            --panel-2: #f8fafc;
+    /* 2025/2026 neutral base (light) */
+    --bg-app: #F6F7FB;
+    --bg-chat: #F1F3F7;
 
-            --text: #111827;
-            --muted: #6b7280;
+    /* Subtle glass surfaces */
+    --panel: rgba(255, 255, 255, 0.72);
+    --panel-2: rgba(255, 255, 255, 0.58);
 
-            --border: rgba(17, 24, 39, 0.08);
-            --shadow: 0 10px 30px rgba(0,0,0,0.10);
-            --shadow-soft: 0 6px 18px rgba(0,0,0,0.08);
+    --text: #0B1220;
+    --muted: rgba(15, 23, 42, 0.60);
 
-            --radius-xl: 20px;
-            --radius-lg: 14px;
-            --radius-md: 12px;
+    --border: rgba(15, 23, 42, 0.08);
+    --border-strong: rgba(15, 23, 42, 0.12);
 
-            --ring: 0 0 0 3px rgba(37, 99, 235, 0.20);
-        }
+    /* Modern soft shadows (no heavy glow) */
+    --shadow: 0 18px 55px rgba(2, 6, 23, 0.10);
+    --shadow-soft: 0 10px 28px rgba(2, 6, 23, 0.08);
 
-        html, body {
-            height: 100%;
-        }
+    --radius-xl: 22px;
+    --radius-lg: 16px;
+    --radius-md: 14px;
 
-        body {
-            font-family: 'Vazirmatn', sans-serif;
-            background: var(--bg-app);
-            color: var(--text);
-            overscroll-behavior-y: none;
-            height: 100vh;
-            height: 100dvh;
-            -webkit-tap-highlight-color: transparent;
-            text-rendering: optimizeLegibility;
-        }
+    /* Focus ring: subtle, brand-friendly */
+    --ring: 0 0 0 4px rgba(37, 99, 235, 0.18);
+  }
 
-        .dir-rtl { direction: rtl; }
-        .safe-pb { padding-bottom: env(safe-area-inset-bottom); }
+  html, body { height: 100%; }
 
-        /* Better focus */
-        :focus-visible {
-            outline: none;
-            box-shadow: var(--ring);
-            border-radius: 10px;
-        }
+  body {
+    font-family: 'Vazirmatn', sans-serif;
+    background: radial-gradient(1200px 600px at 75% -10%, rgba(59,130,246,0.08), transparent 60%),
+                radial-gradient(900px 500px at 10% 20%, rgba(99,102,241,0.06), transparent 55%),
+                var(--bg-app);
+    color: var(--text);
+    overscroll-behavior-y: none;
+    height: 100vh;
+    height: 100dvh;
+    -webkit-tap-highlight-color: transparent;
+    text-rendering: optimizeLegibility;
+  }
 
-        /* Scrollbars (subtle) */
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-thumb { background: rgba(107,114,128,0.35); border-radius: 999px; }
-        ::-webkit-scrollbar-thumb:hover { background: rgba(107,114,128,0.55); }
+  .dir-rtl { direction: rtl; }
+  .safe-pb { padding-bottom: env(safe-area-inset-bottom); }
 
-        /* Cards / panels */
-        .panel {
-            background: var(--panel);
-            border: 1px solid var(--border);
-            border-radius: var(--radius-xl);
-            box-shadow: var(--shadow);
-        }
+  :focus-visible {
+    outline: none;
+    box-shadow: var(--ring);
+    border-radius: 12px;
+  }
 
-        .panel-soft {
-            background: var(--panel);
-            border: 1px solid var(--border);
-            border-radius: var(--radius-xl);
-            box-shadow: var(--shadow-soft);
-        }
+  /* Scrollbars (subtle) */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-thumb { background: rgba(107,114,128,0.30); border-radius: 999px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(107,114,128,0.48); }
 
-        /* Message bubble sizing + readability */
-        .msg-bubble {
-            max-width: min(85%, 720px);
-            position: relative;
-            will-change: transform;
-        }
+  /* Panels: glassy but restrained */
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
 
-        /* Context menu: glassy + safer on top of overlays */
-        .context-menu {
-            position: absolute;
-            background: rgba(255,255,255,0.92);
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            border-radius: 12px;
-            box-shadow: 0 12px 30px rgba(0,0,0,0.18);
-            padding: 6px;
-            z-index: 120;
-            min-width: 160px;
-            overflow: hidden;
-            border: 1px solid rgba(0,0,0,0.06);
-        }
+  .panel-soft {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-soft);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
 
-        .unread-badge {
-            background-color: #ef4444;
-            color: #ffffff;
-            font-size: 10px;
-            height: 18px;
-            min-width: 18px;
-            border-radius: 999px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            padding: 0 6px;
-            font-weight: 800;
-            letter-spacing: 0.2px;
-            box-shadow: 0 6px 14px rgba(239,68,68,0.25);
-        }
+  /* Message bubble sizing + readability */
+  .msg-bubble {
+    max-width: min(85%, 720px);
+    position: relative;
+    will-change: transform;
+  }
 
-        /* Buttons: consistent press feedback */
-        .tap {
-            transition: transform 120ms ease, filter 120ms ease;
-        }
-        .tap:active {
-            transform: scale(0.98);
-            filter: brightness(0.98);
-        }
+  /* Context menu: subtle glass */
+  .context-menu {
+    position: absolute;
+    background: rgba(255,255,255,0.82);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border-radius: 14px;
+    box-shadow: 0 16px 44px rgba(0,0,0,0.16);
+    padding: 6px;
+    z-index: 120;
+    min-width: 160px;
+    overflow: hidden;
+    border: 1px solid rgba(0,0,0,0.06);
+  }
 
-        /* Improve textarea feel */
-        textarea::placeholder { color: rgba(107,114,128,0.85); }
+  .unread-badge {
+    background-color: #ef4444;
+    color: #ffffff;
+    font-size: 10px;
+    height: 18px;
+    min-width: 18px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 6px;
+    font-weight: 800;
+    letter-spacing: 0.2px;
+    box-shadow: 0 6px 14px rgba(239,68,68,0.22);
+  }
 
+  .tap { transition: transform 120ms ease, filter 120ms ease; }
+  .tap:active { transform: scale(0.985); filter: brightness(0.985); }
 
-        /* Dark mode (automatic) */
-        @media (prefers-color-scheme: dark) {
-            :root {
-                --bg-app: #0b1220;
-                --bg-chat: #0f1a2b;
-                --panel: rgba(17,24,39,0.85);
-                --panel-2: rgba(17,24,39,0.70);
-                --text: #e5e7eb;
-                --muted: #9ca3af;
-                --border: rgba(255,255,255,0.10);
-                --shadow: 0 18px 40px rgba(0,0,0,0.35);
-                --shadow-soft: 0 10px 28px rgba(0,0,0,0.28);
-                --ring: 0 0 0 3px rgba(147,197,253,0.25);
-            }
-            ::-webkit-scrollbar-thumb { background: rgba(156,163,175,0.28); }
-            ::-webkit-scrollbar-thumb:hover { background: rgba(156,163,175,0.45); }
-            .context-menu {
-                background: rgba(17,24,39,0.88);
-                border: 1px solid rgba(255,255,255,0.10);
-                color: var(--text);
-            }
-        }
-    </style>
+  textarea::placeholder { color: rgba(107,114,128,0.78); }
+
+  /* Dark mode: modern, no over-contrast, keeps glass */
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg-app: #070B14;
+      --bg-chat: #0B1220;
+
+      --panel: rgba(17, 24, 39, 0.72);
+      --panel-2: rgba(17, 24, 39, 0.56);
+
+      --text: rgba(229,231,235,0.96);
+      --muted: rgba(229,231,235,0.62);
+
+      --border: rgba(255,255,255,0.10);
+      --border-strong: rgba(255,255,255,0.14);
+
+      --shadow: 0 22px 60px rgba(0,0,0,0.45);
+      --shadow-soft: 0 12px 30px rgba(0,0,0,0.34);
+
+      --ring: 0 0 0 4px rgba(56, 189, 248, 0.22);
+    }
+
+    body {
+      background: radial-gradient(1200px 600px at 75% -10%, rgba(56,189,248,0.10), transparent 60%),
+                  radial-gradient(900px 500px at 10% 20%, rgba(99,102,241,0.08), transparent 55%),
+                  var(--bg-app);
+    }
+
+    ::-webkit-scrollbar-thumb { background: rgba(156,163,175,0.24); }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(156,163,175,0.40); }
+
+    .context-menu {
+      background: rgba(17,24,39,0.78);
+      border: 1px solid rgba(255,255,255,0.10);
+      color: var(--text);
+    }
+  }
+</style>
 </head>
-<body class="w-full overflow-hidden flex flex-col text-gray-800 dir-rtl">
+<body class="w-full overflow-hidden flex flex-col dir-rtl">
     <!-- Application Logic remains the same, managed by Vue -->
     <div id="app" class="h-full flex flex-col w-full">
         
@@ -1241,7 +1265,7 @@ cat > public/index.html << 'EOF'
             <div v-if="showSidebar" @click="showSidebar = false" class="absolute inset-0 bg-black/50 z-10 md:hidden"></div>
 
             <!-- Chat Area -->
-            <div class="flex-1 flex flex-col bg-[#e5ddd5] relative bg-opacity-30 h-full min-w-0">
+            <div class="flex-1 flex flex-col relative h-full min-w-0" style="background: var(--bg-chat);">
                 <!-- Wallpaper -->
                 <div class="absolute inset-0 opacity-5 pointer-events-none" style="background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAIklEQVQIW2NkQAKrVq36zwjjgzhhYWGMYAEYB8RmROaABADeOQ8CXl/xfgAAAABJRU5ErkJggg==')"></div>
 
