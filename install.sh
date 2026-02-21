@@ -154,7 +154,7 @@ cd "$DIR"
 cat > package.json << 'EOF'
 {
   "name": "node-socketio-chatroom",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "main": "server.js",
   "scripts": { "start": "node server.js" },
   "dependencies": {
@@ -951,22 +951,25 @@ socket.on('join_private', (targetUser, cb) => {
     return;
   }
 
-  if (!persistentUsers[cleanTarget] || persistentUsers[cleanTarget]?.isBanned) {
+  // ✅ اجازه DM به ادمین حتی اگر داخل users.json نباشد
+  const isAdminTarget = cleanTarget === appConfig.adminUser;
+
+  // ✅ یا کاربر ثبت‌نام‌شده باشد و بن نشده باشد
+  const isRegisteredTarget = !!persistentUsers[cleanTarget] && !persistentUsers[cleanTarget]?.isBanned;
+
+  if (!isAdminTarget && !isRegisteredTarget) {
     if (typeof cb === 'function') cb({ ok: false, error: 'TARGET_NOT_FOUND' });
     return;
   }
 
   const dm = getOrCreateDMConversation(currentUser.username, cleanTarget);
 
-  // (اختیاری اما مفید) ترک room قبلی برای جلوگیری از قاطی شدن پیام‌ها
-  // socket.rooms شامل room خود socket.id هم هست، اون رو نگه دار
   for (const r of socket.rooms) {
     if (r !== socket.id) socket.leave(r);
   }
 
   socket.join(dm.id);
 
-  // ACK به کلاینت: dmId آماده است
   if (typeof cb === 'function') cb({ ok: true, dmId: dm.id });
 
   socket.emit('channel_joined', { name: dm.id, isPrivate: true, isSaved: false });
@@ -2261,14 +2264,13 @@ const startPrivateChat = (targetUsername) => {
   searchQuery.value = '';
   unreadCounts.value[targetUsername] = 0;
 
-  socket.emit('join_private', targetUsername, (res) => {
+    socket.emit('join_private', targetUsername, (res) => {
     if (!res || !res.ok) {
-      accessDeniedBanner.value = 'خطا در شروع پیام خصوصی';
-      return;
+        accessDeniedBanner.value = 'خطا در شروع پیام خصوصی: ' + (res?.error || 'NO_ACK');
+        return;
     }
-    // خیلی مهم: از همین لحظه، DM id درست را ست کن
     currentChannel.value = res.dmId;
-  });
+    });
 };
 
         const openSavedView = () => {
