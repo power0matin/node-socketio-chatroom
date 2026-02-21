@@ -154,7 +154,7 @@ cd "$DIR"
 cat > package.json << 'EOF'
 {
   "name": "node-socketio-chatroom",
-  "version": "1.0.7",
+  "version": "1.0.9",
   "main": "server.js",
   "scripts": { "start": "node server.js" },
   "dependencies": {
@@ -941,23 +941,37 @@ io.on('connection', (socket) => {
     joinChannelCompat(socket, channel);
   });
 
-    socket.on('join_private', (targetUser) => {
-    const currentUser = users[socket.id];
-    if (!currentUser) return;
+socket.on('join_private', (targetUser, cb) => {
+  const currentUser = users[socket.id];
+  if (!currentUser) return;
 
-    const cleanTarget = cleanUsername(targetUser);
-    if (!cleanTarget || cleanTarget === currentUser.username) return;
+  const cleanTarget = cleanUsername(targetUser);
+  if (!cleanTarget || cleanTarget === currentUser.username) {
+    if (typeof cb === 'function') cb({ ok: false, error: 'INVALID_TARGET' });
+    return;
+  }
 
-    if (!persistentUsers[cleanTarget] || persistentUsers[cleanTarget]?.isBanned) {
-        return socket.emit('error', 'کاربر مقصد وجود ندارد یا مسدود شده است.');
-    }
+  if (!persistentUsers[cleanTarget] || persistentUsers[cleanTarget]?.isBanned) {
+    if (typeof cb === 'function') cb({ ok: false, error: 'TARGET_NOT_FOUND' });
+    return;
+  }
 
-    const dm = getOrCreateDMConversation(currentUser.username, cleanTarget);
+  const dm = getOrCreateDMConversation(currentUser.username, cleanTarget);
 
-    socket.join(dm.id);
-    socket.emit('channel_joined', { name: dm.id, isPrivate: true, isSaved: false });
-    socket.emit('history', Array.isArray(messages[dm.id]) ? messages[dm.id] : []);
-    });
+  // (اختیاری اما مفید) ترک room قبلی برای جلوگیری از قاطی شدن پیام‌ها
+  // socket.rooms شامل room خود socket.id هم هست، اون رو نگه دار
+  for (const r of socket.rooms) {
+    if (r !== socket.id) socket.leave(r);
+  }
+
+  socket.join(dm.id);
+
+  // ACK به کلاینت: dmId آماده است
+  if (typeof cb === 'function') cb({ ok: true, dmId: dm.id });
+
+  socket.emit('channel_joined', { name: dm.id, isPrivate: true, isSaved: false });
+  socket.emit('history', Array.isArray(messages[dm.id]) ? messages[dm.id] : []);
+});
 
   // -------------------- Saved Messages --------------------
   socket.on('saved_delete', (msgId) => {
@@ -2135,9 +2149,13 @@ cat > public/index.html << 'EOF'
         const accessMap = ref({});
         const accessDeniedBanner = ref('');
 
-        const canSend = computed(() => {
-        return !!messageText.value.trim() && isConnected.value;
-        });
+const canSend = computed(() => {
+  const t = messageText.value.trim();
+  if (!t) return false;
+  if (!isConnected.value) return false;
+  if (!currentChannel.value) return false;   // ✅ مهم
+  return true;
+});
 
         const sortedUsers = computed(() => {
           return [...onlineUsers.value].sort((a, b) => {
@@ -2230,16 +2248,28 @@ cat > public/index.html << 'EOF'
           unreadCounts.value[ch] = 0;
         };
 
-        const startPrivateChat = (targetUsername) => {
-          isSavedView.value = false;
-          socket.emit('join_private', targetUsername);
-          displayChannelName.value = targetUsername;
-          isPrivateChat.value = true;
-          showSidebar.value = false;
-          searchResults.value = [];
-          searchQuery.value = '';
-          unreadCounts.value[targetUsername] = 0;
-        };
+const startPrivateChat = (targetUsername) => {
+  isSavedView.value = false;
+
+  // جلوگیری از ارسال اشتباهی
+  currentChannel.value = '';
+  messages.value = [];
+  isPrivateChat.value = true;
+  displayChannelName.value = targetUsername;
+  showSidebar.value = false;
+  searchResults.value = [];
+  searchQuery.value = '';
+  unreadCounts.value[targetUsername] = 0;
+
+  socket.emit('join_private', targetUsername, (res) => {
+    if (!res || !res.ok) {
+      accessDeniedBanner.value = 'خطا در شروع پیام خصوصی';
+      return;
+    }
+    // خیلی مهم: از همین لحظه، DM id درست را ست کن
+    currentChannel.value = res.dmId;
+  });
+};
 
         const openSavedView = () => {
         isSavedView.value = true;
