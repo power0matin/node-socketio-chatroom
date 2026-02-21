@@ -1695,6 +1695,155 @@ DIR="__DIR__"
 CONFIG_FILE="$DIR/data/config.json"
 INDEX_FILE="$DIR/public/index.html"
 
+# Repo settings for update
+REPO_URL="https://github.com/power0matin/node-socketio-chatroom.git"
+BRANCH="main"
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || { echo "ERROR: '$1' not found."; return 1; }
+}
+
+pause() { read -r -p "Press Enter..." ; }
+
+timestamp() { date +"%Y%m%d-%H%M%S"; }
+
+make_backup() {
+  local ts; ts="$(timestamp)"
+  local bdir="$DIR/backup"
+  mkdir -p "$bdir"
+
+  # Backup critical persistent data
+  if [[ -d "$DIR/data" ]]; then
+    tar -czf "$bdir/data-$ts.tar.gz" -C "$DIR" data >/dev/null 2>&1 || true
+  fi
+  if [[ -d "$DIR/public/uploads" ]]; then
+    tar -czf "$bdir/uploads-$ts.tar.gz" -C "$DIR/public" uploads >/dev/null 2>&1 || true
+  fi
+  echo "Backup created in: $bdir"
+}
+
+update_via_git_clone() {
+  require_cmd git || return 1
+  require_cmd rsync || return 1
+
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp" >/dev/null 2>&1 || true' RETURN
+
+  echo "[1/5] Cloning latest code into temp..."
+  git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$tmp/repo" >/dev/null 2>&1 || {
+    echo "ERROR: git clone failed. Check REPO_URL / BRANCH or repo access."
+    return 1
+  }
+
+  echo "[2/5] Syncing code (preserving database/uploads/config)..."
+  # Exclude persistent/runtime dirs
+  rsync -a --delete \
+    --exclude ".git/" \
+    --exclude "data/" \
+    --exclude "public/uploads/" \
+    --exclude "node_modules/" \
+    "$tmp/repo/" "$DIR/"
+
+  echo "Code synced."
+}
+
+update_via_zip() {
+  require_cmd curl || return 1
+  require_cmd rsync || return 1
+
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp" >/dev/null 2>&1 || true' RETURN
+
+  local zip_url="https://codeload.github.com/power0matin/node-socketio-chatroom/zip/refs/heads/$BRANCH"
+
+  echo "[1/5] Downloading zip: $zip_url"
+  curl -fsSL "$zip_url" -o "$tmp/repo.zip" || {
+    echo "ERROR: zip download failed. Repo may be private or BRANCH is wrong."
+    return 1
+  }
+
+  require_cmd unzip || return 1
+  unzip -q "$tmp/repo.zip" -d "$tmp" || { echo "ERROR: unzip failed"; return 1; }
+
+  local extracted
+  extracted="$(find "$tmp" -maxdepth 1 -type d -name "node-socketio-chatroom-*" | head -n1 || true)"
+  [[ -n "$extracted" ]] || { echo "ERROR: Could not find extracted folder."; return 1; }
+
+  echo "[2/5] Syncing code (preserving database/uploads/config)..."
+  rsync -a --delete \
+    --exclude "data/" \
+    --exclude "public/uploads/" \
+    --exclude "node_modules/" \
+    "$extracted/" "$DIR/"
+
+  echo "Code synced."
+}
+
+update_app() {
+  echo "-----------------------------------"
+  echo "Updating node-socketio-chatroom..."
+  echo "Preserve: data/ , public/uploads/ , config.json"
+  echo "-----------------------------------"
+
+  require_cmd pm2 || return 1
+  require_cmd node || return 1
+
+  if [[ ! -d "$DIR" ]]; then
+    echo "ERROR: Project directory not found: $DIR"
+    return 1
+  fi
+
+  # Lock to prevent concurrent updates
+  local lock="$DIR/.update.lock"
+  if [[ -e "$lock" ]]; then
+    echo "ERROR: Another update seems running. Lock exists: $lock"
+    return 1
+  fi
+  touch "$lock"
+  trap 'rm -f "$lock" >/dev/null 2>&1 || true' RETURN
+
+  cd "$DIR"
+
+  echo "[0/5] Creating backup..."
+  make_backup
+
+  # Prefer git clone method; fallback to zip if git fails
+  echo "[1/5] Fetching latest source..."
+  if command -v git >/dev/null 2>&1; then
+    if ! update_via_git_clone; then
+      echo "Git method failed. Trying ZIP method..."
+      update_via_zip || return 1
+    fi
+  else
+    echo "git not found. Using ZIP method..."
+    update_via_zip || return 1
+  fi
+
+  # Find npm
+  local NPM_BIN=""
+  for p in /usr/bin/npm /usr/local/bin/npm /bin/npm; do
+    if [[ -x "$p" ]]; then NPM_BIN="$p"; break; fi
+  done
+  if [[ -z "$NPM_BIN" ]]; then
+    NPM_BIN="$(command -v npm 2>/dev/null || true)"
+  fi
+  if [[ -z "$NPM_BIN" ]]; then
+    echo "ERROR: npm not found."
+    return 1
+  fi
+
+  echo "[3/5] Installing dependencies..."
+  "$NPM_BIN" install || { echo "ERROR: npm install failed."; return 1; }
+
+  echo "[4/5] Restarting PM2 process..."
+  pm2 restart "$APP_NAME" || { echo "ERROR: pm2 restart failed."; return 1; }
+
+  echo "[5/5] Done."
+  echo "Update completed successfully."
+}
+
 while true; do
   clear
   echo "==================================="
@@ -1705,15 +1854,16 @@ while true; do
   echo "3. Stop Server"
   echo "4. View Logs"
   echo "5. Settings (User/Pass/Size/Name/Origins)"
-  echo "6. Uninstall / Delete"
-  echo "7. Exit"
+  echo "6. Update (Preserve data/uploads)"
+  echo "7. Uninstall / Delete"
+  echo "0. Exit"
   echo "==================================="
   read -r -p "Select option: " opt
 
   case $opt in
-    1) pm2 status "$APP_NAME"; read -r -p "Press Enter..." ;;
-    2) pm2 restart "$APP_NAME"; echo "Restarted."; read -r -p "Press Enter..." ;;
-    3) pm2 stop "$APP_NAME"; echo "Stopped."; read -r -p "Press Enter..." ;;
+    1) pm2 status "$APP_NAME"; pause ;;
+    2) pm2 restart "$APP_NAME"; echo "Restarted."; pause ;;
+    3) pm2 stop "$APP_NAME"; echo "Stopped."; pause ;;
     4) pm2 logs "$APP_NAME" --lines 50 ;;
     5)
       echo "--- Current Settings ---"
@@ -1759,9 +1909,13 @@ while true; do
           pm2 restart "$APP_NAME"
           ;;
       esac
-      read -r -p "Press Enter..."
+      pause
       ;;
     6)
+      update_app
+      pause
+      ;;
+    7)
       read -r -p "Are you sure you want to DELETE everything? (y/n): " confirm
       if [[ "$confirm" == "y" ]]; then
         pm2 delete "$APP_NAME" || true
@@ -1771,7 +1925,7 @@ while true; do
         exit 0
       fi
       ;;
-    7) exit 0 ;;
+    0) exit 0 ;;
     *) echo "Invalid option"; sleep 1 ;;
   esac
 done
