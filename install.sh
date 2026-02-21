@@ -927,955 +927,1039 @@ cat > public/index.html << 'EOF'
 
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
+
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>__APP_NAME_PLACEHOLDER__</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap" rel="stylesheet">
-    <script src="/socket.io/socket.io.js"></script>
-    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    
-    <script>
-      tailwind.config = {
-        theme: {
-          extend: {
-            colors: {
-              brand: {
-                DEFAULT: 'var(--brand-color)',
-                dark: 'var(--brand-dark)',
-                light: 'var(--brand-light)',
-              }
+  <meta charset="UTF-8">
+  <meta name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>__APP_NAME_PLACEHOLDER__</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap" rel="stylesheet">
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              DEFAULT: 'var(--brand-color)',
+              dark: 'var(--brand-dark)',
+              light: 'var(--brand-light)',
             }
           }
         }
       }
-    </script>
-<style>
-  :root {
-    /* Replaced by installer */
-    --brand-color: __COLOR_DEFAULT__;
-    --brand-dark: __COLOR_DARK__;
-    --brand-light: __COLOR_LIGHT__;
+    }
+  </script>
+  <style>
+    :root {
+      /* Replaced by installer */
+      --brand-color: __COLOR_DEFAULT__;
+      --brand-dark: __COLOR_DARK__;
+      --brand-light: __COLOR_LIGHT__;
 
-    /* Light-only base (clean + cohesive) */
-    --bg-app: #F7F8FC;
-    --bg-chat: #F2F4F8;
+      /* Light-only base (clean + cohesive) */
+      --bg-app: #F7F8FC;
+      --bg-chat: #F2F4F8;
 
-    /* Surfaces */
-    --panel: rgba(255, 255, 255, 0.82);
-    --panel-2: rgba(255, 255, 255, 0.66);
+      /* Surfaces */
+      --panel: rgba(255, 255, 255, 0.82);
+      --panel-2: rgba(255, 255, 255, 0.66);
 
-    --text: #0B1220;
-    --muted: rgba(15, 23, 42, 0.62);
+      --text: #0B1220;
+      --muted: rgba(15, 23, 42, 0.62);
 
-    --border: rgba(15, 23, 42, 0.10);
-    --border-strong: rgba(15, 23, 42, 0.14);
+      --border: rgba(15, 23, 42, 0.10);
+      --border-strong: rgba(15, 23, 42, 0.14);
 
-    /* Shadows (soft, modern) */
-    --shadow: 0 18px 55px rgba(2, 6, 23, 0.10);
-    --shadow-soft: 0 10px 28px rgba(2, 6, 23, 0.08);
+      /* Shadows (soft, modern) */
+      --shadow: 0 18px 55px rgba(2, 6, 23, 0.10);
+      --shadow-soft: 0 10px 28px rgba(2, 6, 23, 0.08);
 
-    --radius-xl: 22px;
-    --radius-lg: 16px;
-    --radius-md: 14px;
+      --radius-xl: 22px;
+      --radius-lg: 16px;
+      --radius-md: 14px;
 
-    /* Focus ring uses brand (dynamic) */
-    --ring: 0 0 0 4px color-mix(in srgb, var(--brand-color) 22%, transparent);
-  }
+      /* Focus ring uses brand (dynamic) */
+      --ring: 0 0 0 4px color-mix(in srgb, var(--brand-color) 22%, transparent);
+    }
 
-  html, body { height: 100%; }
+    html,
+    body {
+      height: 100%;
+    }
 
-  body {
-    font-family: 'Vazirmatn', sans-serif;
-    background:
-      radial-gradient(1100px 600px at 78% -10%, color-mix(in srgb, var(--brand-color) 14%, transparent), transparent 60%),
-      radial-gradient(900px 520px at 12% 18%, color-mix(in srgb, var(--brand-dark) 10%, transparent), transparent 55%),
-      linear-gradient(180deg, #FFFFFF 0%, var(--bg-app) 42%, var(--bg-app) 100%);
-    color: var(--text);
-    overscroll-behavior-y: none;
-    height: 100vh;
-    height: 100dvh;
-    -webkit-tap-highlight-color: transparent;
-    text-rendering: optimizeLegibility;
-  }
+    body {
+      font-family: 'Vazirmatn', sans-serif;
+      background:
+        radial-gradient(1100px 600px at 78% -10%, color-mix(in srgb, var(--brand-color) 14%, transparent), transparent 60%),
+        radial-gradient(900px 520px at 12% 18%, color-mix(in srgb, var(--brand-dark) 10%, transparent), transparent 55%),
+        linear-gradient(180deg, #FFFFFF 0%, var(--bg-app) 42%, var(--bg-app) 100%);
+      color: var(--text);
+      overscroll-behavior-y: none;
+      height: 100vh;
+      height: 100dvh;
+      -webkit-tap-highlight-color: transparent;
+      text-rendering: optimizeLegibility;
+    }
 
-  .dir-rtl { direction: rtl; }
-  .safe-pb { padding-bottom: env(safe-area-inset-bottom); }
+    .dir-rtl {
+      direction: rtl;
+    }
 
-  :focus-visible {
-    outline: none;
-    box-shadow: var(--ring);
-    border-radius: 12px;
-  }
+    .safe-pb {
+      padding-bottom: env(safe-area-inset-bottom);
+    }
 
-  /* Scrollbars (subtle) */
-  ::-webkit-scrollbar { width: 6px; height: 6px; }
-  ::-webkit-scrollbar-thumb { background: rgba(107,114,128,0.28); border-radius: 999px; }
-  ::-webkit-scrollbar-thumb:hover { background: rgba(107,114,128,0.42); }
+    :focus-visible {
+      outline: none;
+      box-shadow: var(--ring);
+      border-radius: 12px;
+    }
 
-  /* Panels: glassy but restrained */
-  .panel {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-xl);
-    box-shadow: var(--shadow);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-  }
+    /* Scrollbars (subtle) */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
 
-  .panel-soft {
-    background: var(--panel-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-xl);
-    box-shadow: var(--shadow-soft);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-  }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(107, 114, 128, 0.28);
+      border-radius: 999px;
+    }
 
-  /* Message bubble sizing + readability */
-  .msg-bubble {
-    max-width: min(85%, 720px);
-    position: relative;
-    will-change: transform;
-  }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(107, 114, 128, 0.42);
+    }
 
-  /* Context menu: subtle glass */
-  .context-menu {
-    position: absolute;
-    background: rgba(255,255,255,0.90);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-    border-radius: 14px;
-    box-shadow: 0 16px 44px rgba(0,0,0,0.14);
-    padding: 6px;
-    z-index: 120;
-    min-width: 160px;
-    overflow: hidden;
-    border: 1px solid rgba(15,23,42,0.08);
-    color: var(--text);
-  }
+    /* Panels: glassy but restrained */
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+    }
 
-  .unread-badge {
-    background-color: #ef4444;
-    color: #ffffff;
-    font-size: 10px;
-    height: 18px;
-    min-width: 18px;
-    border-radius: 999px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0 6px;
-    font-weight: 800;
-    letter-spacing: 0.2px;
-    box-shadow: 0 6px 14px rgba(239,68,68,0.22);
-  }
+    .panel-soft {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow-soft);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
 
-  .tap { transition: transform 120ms ease, filter 120ms ease; }
-  .tap:active { transform: scale(0.985); filter: brightness(0.985); }
+    /* Message bubble sizing + readability */
+    .msg-bubble {
+      max-width: min(85%, 720px);
+      position: relative;
+      will-change: transform;
+    }
 
-  textarea::placeholder { color: rgba(107,114,128,0.78); }
-</style>
+    /* Context menu: subtle glass */
+    .context-menu {
+      position: absolute;
+      background: rgba(255, 255, 255, 0.90);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border-radius: 14px;
+      box-shadow: 0 16px 44px rgba(0, 0, 0, 0.14);
+      padding: 6px;
+      z-index: 120;
+      min-width: 160px;
+      overflow: hidden;
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      color: var(--text);
+    }
+
+    .unread-badge {
+      background-color: #ef4444;
+      color: #ffffff;
+      font-size: 10px;
+      height: 18px;
+      min-width: 18px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 6px;
+      font-weight: 800;
+      letter-spacing: 0.2px;
+      box-shadow: 0 6px 14px rgba(239, 68, 68, 0.22);
+    }
+
+    .tap {
+      transition: transform 120ms ease, filter 120ms ease;
+    }
+
+    .tap:active {
+      transform: scale(0.985);
+      filter: brightness(0.985);
+    }
+
+    textarea::placeholder {
+      color: rgba(107, 114, 128, 0.78);
+    }
+  </style>
 </head>
+
 <body class="w-full overflow-hidden flex flex-col dir-rtl">
-    <!-- Application Logic remains the same, managed by Vue -->
-    <div id="app" class="h-full flex flex-col w-full">
-        
-        <!-- Login Screen -->
-<div v-if="!isLoggedIn" class="fixed inset-0 bg-white/75 backdrop-blur-md flex items-center justify-center z-50 p-4">
-    <div class="panel w-full max-w-sm text-center overflow-hidden">
+  <!-- Application Logic remains the same, managed by Vue -->
+  <div id="app" class="h-full flex flex-col w-full">
+
+    <!-- Login Screen -->
+    <div v-if="!isLoggedIn"
+      class="fixed inset-0 bg-white/75 backdrop-blur-md flex items-center justify-center z-50 p-4">
+      <div class="panel w-full max-w-sm text-center overflow-hidden">
         <div class="p-6 md:p-8">
-            <div class="w-16 h-16 bg-brand rounded-2xl mx-auto flex items-center justify-center mb-4 text-white text-2xl shadow-lg shadow-brand/25">
-                <i class="fas fa-comments"></i>
-            </div>
-            <h1 class="text-2xl font-extrabold mb-2 text-brand-dark tracking-tight">{{ appName }}</h1>
-            <p class="text-xs text-gray-500 mb-6 leading-relaxed">برای ورود یا ثبت نام اطلاعات زیر را وارد کنید</p>
+          <div
+            class="w-16 h-16 bg-brand rounded-2xl mx-auto flex items-center justify-center mb-4 text-white text-2xl shadow-lg shadow-brand/25">
+            <i class="fas fa-comments"></i>
+          </div>
+          <h1 class="text-2xl font-extrabold mb-2 text-brand-dark tracking-tight">{{ appName }}</h1>
+          <p class="text-xs text-gray-500 mb-6 leading-relaxed">برای ورود یا ثبت نام اطلاعات زیر را وارد کنید</p>
 
-            <div class="space-y-3">
-                <input v-model="loginForm.username" @keyup.enter="login" placeholder="نام کاربری" autocomplete="username"
-                       class="w-full p-3 border rounded-xl bg-white/90 focus:ring-2 focus:ring-brand outline-none text-center dir-rtl">
+          <div class="space-y-3">
+            <input v-model="loginForm.username" @keyup.enter="login" placeholder="نام کاربری" autocomplete="username"
+              class="w-full p-3 border rounded-xl bg-white/90 focus:ring-2 focus:ring-brand outline-none text-center dir-rtl">
 
-                <input v-model="loginForm.password" @keyup.enter="login" type="password" placeholder="رمز عبور" autocomplete="current-password"
-                       class="w-full p-3 border rounded-xl bg-white/90 focus:ring-2 focus:ring-brand outline-none text-center dir-rtl">
+            <input v-model="loginForm.password" @keyup.enter="login" type="password" placeholder="رمز عبور"
+              autocomplete="current-password"
+              class="w-full p-3 border rounded-xl bg-white/90 focus:ring-2 focus:ring-brand outline-none text-center dir-rtl">
 
-                <button @click="login" :disabled="isAuthBusy || !loginForm.username || !loginForm.password"
-                        class="w-full bg-brand text-white py-3 rounded-xl font-extrabold hover:bg-brand-dark transition shadow-lg shadow-brand/25 disabled:opacity-60 disabled:cursor-not-allowed tap">
-                    <span v-if="!isAuthBusy">ورود / ثبت نام</span>
-                    <span v-else class="inline-flex items-center gap-2 justify-center">
-                        <i class="fas fa-circle-notch fa-spin"></i>
-                        در حال اتصال...
-                    </span>
-                </button>
+            <button @click="login" :disabled="isAuthBusy || !loginForm.username || !loginForm.password"
+              class="w-full bg-brand text-white py-3 rounded-xl font-extrabold hover:bg-brand-dark transition shadow-lg shadow-brand/25 disabled:opacity-60 disabled:cursor-not-allowed tap">
+              <span v-if="!isAuthBusy">ورود / ثبت نام</span>
+              <span v-else class="inline-flex items-center gap-2 justify-center">
+                <i class="fas fa-circle-notch fa-spin"></i>
+                در حال اتصال...
+              </span>
+            </button>
 
-                <p v-if="error" class="text-red-600 text-sm mt-2 bg-red-50 p-2 rounded-lg border border-red-100">{{ error }}</p>
-            </div>
+            <p v-if="error" class="text-red-600 text-sm mt-2 bg-red-50 p-2 rounded-lg border border-red-100">{{ error }}
+            </p>
+          </div>
 
-            <div class="mt-5 text-[11px] text-gray-400 leading-relaxed">
-                با ورود شما، یک حساب کاربری (در صورت نبود) ساخته می‌شود.
-            </div>
+          <div class="mt-5 text-[11px] text-gray-400 leading-relaxed">
+            با ورود شما، یک حساب کاربری (در صورت نبود) ساخته می‌شود.
+          </div>
         </div>
+      </div>
     </div>
-</div>
 
-        <!-- Chat Interface -->
-        <div v-else class="flex h-full relative w-full overflow-hidden">
-            
-            <!-- Sidebar -->
-            <div :class="['absolute md:relative z-20 h-full bg-white border-l shadow-xl md:shadow-none transition-transform duration-300 w-72 flex flex-col shrink-0', showSidebar ? 'translate-x-0' : 'translate-x-full md:translate-x-0']">
-                <!-- User Info -->
-                <div class="p-4 bg-gradient-to-l from-brand to-brand-dark text-white shadow shrink-0">
-                    <div class="flex justify-between items-center">
-                         <div>
-                            <h2 class="font-bold text-lg">{{ appName }}</h2>
-                            <p class="text-xs opacity-90 mt-1 flex items-center gap-1">
-                                <i class="fas fa-user-circle"></i> {{ user.username }}
-                                <span v-if="user.role === 'admin'" class="bg-yellow-400 text-black px-1 rounded text-[9px] font-bold">مدیر</span>
-                                <span v-else-if="user.role === 'vip'" class="bg-blue-400 text-white px-1 rounded text-[9px] font-bold">ویژه</span>
-                            </p>
-                         </div>
-                         <div class="flex gap-1">
-                             <!-- Admin Settings Button -->
-                             <button v-if="user.role === 'admin'" @click="showAdminSettings = true" class="text-xs bg-white/20 p-2 rounded hover:bg-white/30" title="تنظیمات"><i class="fas fa-cog"></i></button>
-                             <button @click="logout" class="text-xs bg-white/20 p-2 rounded hover:bg-white/30" title="خروج"><i class="fas fa-sign-out-alt"></i></button>
-                         </div>
-                    </div>
-                </div>
-                
-                <!-- Tools -->
-                <div class="p-2 border-b bg-gray-50 flex gap-2 overflow-x-auto shrink-0">
-                     <button v-if="canBan" @click="openBanList" class="bg-red-100 text-red-600 px-3 py-1 rounded text-xs whitespace-nowrap"><i class="fas fa-ban"></i> لیست سیاه</button>
-                </div>
+    <!-- Chat Interface -->
+    <div v-else class="flex h-full relative w-full overflow-hidden">
 
-                <!-- Search -->
-                <div class="p-2 border-b bg-white shrink-0">
-                    <input v-model="searchQuery" @input="searchUser" placeholder="جستجوی کاربر..." class="w-full px-3 py-1.5 rounded-lg border text-sm bg-gray-50 focus:outline-none focus:border-brand">
-                </div>
-
-                <!-- Lists -->
-                <div class="flex-1 overflow-y-auto p-2 space-y-4">
-                    
-                    <!-- Search Results -->
-                    <div v-if="searchResults.length > 0">
-                        <h3 class="text-xs font-bold text-gray-400 mb-2 px-2">نتایج جستجو</h3>
-                        <ul>
-                            <li v-for="u in searchResults" :key="u" @click="startPrivateChat(u)" class="flex items-center gap-2 p-2 rounded hover:bg-gray-100 cursor-pointer">
-                                <div class="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-gray-500"><i class="fas fa-user"></i></div>
-                                <span class="text-sm font-medium">{{ u }}</span>
-                            </li>
-                        </ul>
-                        <hr class="my-2">
-                    </div>
-
-                    <!-- Channels -->
-                    <div>
-                        <h3 class="text-xs font-bold text-gray-400 mb-2 px-2 flex justify-between items-center">
-                            کانال‌ها
-                            <button v-if="canCreateChannel" @click="toggleCreateChannel" class="text-brand hover:text-brand-dark text-xs bg-brand/10 w-5 h-5 rounded-full flex items-center justify-center"><i class="fas fa-plus"></i></button>
-                        </h3>
-                        
-                        <div v-if="showCreateChannelInput" class="mb-2 px-2 flex gap-1 animate-fade-in">
-                            <input v-model="newChannelName" class="w-full text-xs p-1 border rounded" placeholder="نام کانال...">
-                            <button @click="createChannel" class="bg-green-500 text-white px-2 rounded text-xs"><i class="fas fa-check"></i></button>
-                        </div>
-
-                        <ul class="space-y-1">
-                            <li v-for="ch in channels" :key="ch" class="group relative p-2 rounded-lg cursor-pointer flex items-center justify-between transition"
-                                :class="currentChannel === ch ? 'bg-brand/10 text-brand font-bold' : 'hover:bg-gray-100 text-gray-600'">
-                                <div class="flex items-center gap-2 w-full" @click="joinChannel(ch, false)">
-                                    <i class="fas fa-hashtag text-xs opacity-50"></i>
-                                    <span class="text-sm truncate">{{ ch }}</span>
-                                </div>
-                                <div v-if="unreadCounts[ch] > 0" class="unread-badge">{{ unreadCounts[ch] }}</div>
-                                <button v-if="canCreateChannel && ch !== 'General'" @click.stop="deleteChannel(ch)" class="text-red-400 hover:text-red-600 px-2 hidden group-hover:block"><i class="fas fa-trash text-xs"></i></button>
-                            </li>
-                        </ul>
-                    </div>
-                    
-                    <!-- Online Users -->
-                    <div>
-                         <h3 class="text-xs font-bold text-gray-400 mb-2 px-2 mt-4">کاربران آنلاین ({{ sortedUsers.length }})</h3>
-                         <ul class="space-y-1">
-                            <li v-for="u in sortedUsers" :key="u.username" 
-                                @click="handleUserClick(u)"
-                                @contextmenu.prevent="showUserContext($event, u.username)"
-                                class="flex items-center gap-2 p-2 rounded hover:bg-gray-100 cursor-pointer transition">
-                                <div class="relative">
-                                    <div class="w-9 h-9 rounded-full flex items-center justify-center text-gray-600 text-xs font-bold shadow-sm"
-                                        :class="{'bg-yellow-100 text-yellow-700': u.role === 'admin', 'bg-blue-100 text-blue-700': u.role === 'vip', 'bg-gray-200': u.role === 'user'}">
-                                        <i v-if="u.role === 'admin'" class="fas fa-crown text-sm"></i>
-                                        <i v-else-if="u.role === 'vip'" class="fas fa-gem text-sm"></i>
-                                        <span v-else>{{ u.username.substring(0,2).toUpperCase() }}</span>
-                                    </div>
-                                    <div class="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-white rounded-full"></div>
-                                </div>
-                                <div class="flex flex-col flex-1">
-                                    <span class="text-sm font-medium flex items-center gap-1">
-                                        {{ u.username }} 
-                                        <span v-if="u.username === user.username" class="text-[10px] text-gray-400">(شما)</span>
-                                    </span>
-                                    <span class="text-[10px] text-gray-400">
-                                        {{ u.role === 'admin' ? 'مدیر کل' : (u.role === 'vip' ? 'کاربر ویژه' : 'کاربر') }}
-                                    </span>
-                                </div>
-                                <div v-if="unreadCounts[u.username] > 0" class="unread-badge">{{ unreadCounts[u.username] }}</div>
-                            </li>
-                         </ul>
-                    </div>
-                </div>
+      <!-- Sidebar -->
+      <div
+        :class="['absolute md:relative z-20 h-full bg-white border-l shadow-xl md:shadow-none transition-transform duration-300 w-72 flex flex-col shrink-0', showSidebar ? 'translate-x-0' : 'translate-x-full md:translate-x-0']">
+        <!-- User Info -->
+        <div class="p-4 bg-gradient-to-l from-brand to-brand-dark text-white shadow shrink-0">
+          <div class="flex justify-between items-center">
+            <div>
+              <h2 class="font-bold text-lg">{{ appName }}</h2>
+              <p class="text-xs opacity-90 mt-1 flex items-center gap-1">
+                <i class="fas fa-user-circle"></i> {{ user.username }}
+                <span v-if="user.role === 'admin'"
+                  class="bg-yellow-400 text-black px-1 rounded text-[9px] font-bold">مدیر</span>
+                <span v-else-if="user.role === 'vip'"
+                  class="bg-blue-400 text-white px-1 rounded text-[9px] font-bold">ویژه</span>
+              </p>
             </div>
-
-            <!-- Mobile Sidebar Overlay -->
-<div v-if="showSidebar" @click="showSidebar = false" class="absolute inset-0 bg-white/70 backdrop-blur-sm z-10 md:hidden"></div>
-
-            <!-- Chat Area -->
-            <div class="flex-1 flex flex-col relative h-full min-w-0" style="background: var(--bg-chat);">
-                <!-- Wallpaper -->
-                <div class="absolute inset-0 opacity-5 pointer-events-none" style="background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAIklEQVQIW2NkQAKrVq36zwjjgzhhYWGMYAEYB8RmROaABADeOQ8CXl/xfgAAAABJRU5ErkJggg==')"></div>
-
-                <!-- Header -->
-                <div class="bg-white/90 backdrop-blur-md border-b border-black/5 p-3 flex items-center gap-3 z-20 shrink-0 sticky top-0">
-                    <button class="md:hidden text-gray-600 p-2 rounded-lg hover:bg-black/5 tap" @click="showSidebar = true" aria-label="باز کردن منو">
-                        <i class="fas fa-bars"></i>
-                    </button>
-
-                    <div class="flex-1 min-w-0">
-                        <h2 class="font-extrabold text-gray-900 flex items-center gap-2 truncate">
-                            <span v-if="isPrivateChat" class="text-brand"><i class="fas fa-user-lock"></i></span>
-                            <span v-else class="text-gray-500"><i class="fas fa-hashtag"></i></span>
-                            <span class="truncate">{{ displayChannelName }}</span>
-                        </h2>
-
-                        <div class="mt-0.5 flex items-center gap-2 text-[11px] text-gray-500">
-                            <span :class="isConnected ? 'text-green-600' : 'text-red-600'" class="inline-flex items-center gap-1">
-                                <span class="inline-block w-2 h-2 rounded-full" :class="isConnected ? 'bg-green-500' : 'bg-red-500'"></span>
-                                <span v-if="isConnected">متصل</span>
-                                <span v-else>قطع</span>
-                            </span>
-                            <span class="opacity-60">•</span>
-                            <span class="truncate">برای رفتن به خط جدید: Shift + Enter</span>
-                        </div>
-                    </div>
-
-                    <button v-if="showScrollDown" @click="scrollToBottom(true)"
-                            class="w-10 h-10 rounded-full bg-black/5 hover:bg-black/10 text-gray-700 flex items-center justify-center tap"
-                            aria-label="رفتن به آخر گفتگو">
-                        <i class="fas fa-arrow-down"></i>
-                    </button>
-                </div>
-                
-                <!-- Upload Progress -->
-                <div v-if="isUploading" class="bg-brand-light/20 p-2 text-center text-xs text-brand-dark border-b border-brand-light/30">
-                    <div class="flex items-center justify-between px-4 mb-1">
-                        <span>در حال ارسال فایل...</span>
-                        <span>{{ uploadProgress }}%</span>
-                    </div>
-                    <div class="w-full bg-gray-200 rounded-full h-1.5">
-                        <div class="bg-brand h-1.5 rounded-full transition-all duration-200" :style="{ width: uploadProgress + '%' }"></div>
-                    </div>
-                </div>
-
-                <!-- Messages -->
-                <div class="flex-1 overflow-y-auto p-4 space-y-2 min-h-0" id="messages-container" ref="msgContainer">
-                    <div v-for="msg in messages" :key="msg.id" 
-                         :class="['flex w-full', msg.sender === user.username ? 'justify-end' : 'justify-start']"
-                         :id="'msg-row-' + msg.id">
-                        
-                        <div 
-                             @touchstart="touchStart($event, msg)"
-                             @touchmove="touchMove($event)"
-                             @touchend="touchEnd($event)"
-                             @contextmenu.prevent="showContext($event, msg)"
-                             :style="getSwipeStyle(msg.id)"
-                             class="msg-bubble transition-transform duration-75 ease-out select-none"
-                             :id="'msg-' + msg.id">
-                            
-                            <div class="absolute right-[-40px] top-1/2 transform -translate-y-1/2 text-brand text-lg opacity-0 transition-opacity" :class="{'opacity-100': swipeId === msg.id && swipeOffset < -40}">
-                                <i class="fas fa-reply"></i>
-                            </div>
-
-                            <div :class="['rounded-2xl px-4 py-2 shadow-sm text-sm relative border', 
-                                          msg.sender === user.username ? 'bg-brand-light border-brand/20 rounded-tr-none' : 'bg-white border-gray-100 rounded-tl-none']">
-                                
-                                <div v-if="msg.replyTo" @click="scrollToMessage(msg.replyTo.id)" class="mb-2 p-2 rounded bg-black/5 border-r-4 border-brand cursor-pointer text-xs">
-                                    <div class="font-bold text-brand-dark mb-1">{{ msg.replyTo.sender }}</div>
-                                    <div class="truncate opacity-70">{{ msg.replyTo.text || 'Media' }}</div>
-                                </div>
-
-                                <div v-if="msg.sender !== user.username" class="font-bold text-xs mb-1 text-brand-dark flex items-center gap-1">
-                                    {{ msg.sender }}
-                                    <i v-if="msg.role === 'admin'" class="fas fa-crown text-yellow-500 text-[10px]"></i>
-                                    <i v-else-if="msg.role === 'vip'" class="fas fa-gem text-blue-500 text-[10px]"></i>
-                                </div>
-                                
-                                <div class="break-words leading-relaxed" v-if="msg.type === 'text'">{{ msg.text }}</div>
-                                <img v-if="msg.type === 'image'" :src="msg.content" class="max-w-full rounded-lg mt-1 cursor-pointer hover:opacity-90 transition" @click="viewImage(msg.content)">
-                                <video v-if="msg.type === 'video'" :src="msg.content" controls class="max-w-full rounded-lg mt-1"></video>
-                                <audio v-if="msg.type === 'audio'" :src="msg.content" controls class="mt-1 w-full min-w-[200px]"></audio>
-                                <div v-if="msg.type === 'file'" class="mt-1 bg-black/5 p-3 rounded flex items-center gap-3">
-                                    <div class="w-10 h-10 bg-brand/20 rounded flex items-center justify-center text-brand text-xl">
-                                        <i class="fas fa-file-alt"></i>
-                                    </div>
-                                    <div class="flex-1 overflow-hidden">
-                                        <div class="truncate font-bold text-xs">{{ msg.fileName || 'File' }}</div>
-                                        <a :href="msg.content" target="_blank" class="text-[10px] text-blue-500 hover:underline">دانلود فایل</a>
-                                    </div>
-                                </div>
-                                
-                                <div :class="['text-[9px] mt-1 text-left', msg.sender === user.username ? 'text-brand-dark/50' : 'text-gray-400']">
-                                    {{ msg.timestamp }}
-                                    <i v-if="msg.sender === user.username" class="fas fa-check-double ml-1 text-blue-400"></i>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Reply Input -->
-                <div v-if="replyingTo" class="bg-gray-50 border-t p-2 flex justify-between items-center border-b border-gray-200 shrink-0">
-                    <div class="flex-1 text-sm border-r-4 border-brand pr-3">
-                        <div class="font-bold text-brand text-xs">پاسخ به {{ replyingTo.sender }}</div>
-                        <div class="text-gray-500 text-xs truncate">{{ replyingTo.text || 'File' }}</div>
-                    </div>
-                    <button @click="cancelReply" class="p-2 text-gray-500 hover:text-red-500"><i class="fas fa-times"></i></button>
-                </div>
-
-                <!-- Input Area -->
-                <div class="p-2 safe-pb bg-white/90 backdrop-blur-md border-t border-black/5 flex items-end gap-2 z-20 shrink-0">
-                    <div class="flex pb-2 gap-1">
-                        <button class="w-10 h-10 rounded-full hover:bg-black/5 text-gray-600 text-lg transition tap" @click="$refs.fileInput.click()" aria-label="ارسال فایل">
-                            <i class="fas fa-paperclip"></i>
-                        </button>
-                        <input ref="fileInput" type="file" class="hidden" @change="handleFileUpload">
-
-                        <button @click="toggleRecording" :class="['w-10 h-10 rounded-full transition text-lg tap', isRecording ? 'text-red-600 bg-red-50 animate-pulse' : 'hover:bg-black/5 text-gray-600']"
-                                aria-label="ضبط صدا">
-                            <i class="fas fa-microphone"></i>
-                        </button>
-                    </div>
-
-                    <div class="flex-1 bg-gray-100/80 rounded-2xl flex items-end p-2 border border-black/5 focus-within:ring-1 focus-within:ring-brand focus-within:bg-white transition">
-                        <textarea v-model="messageText"
-                               @keydown="handleComposerKeydown"
-                               @input="autoResize"
-                               ref="textarea"
-                               placeholder="پیام..."
-                               class="flex-1 bg-transparent outline-none max-h-40 min-h-[44px] resize-none py-2 px-2 text-sm leading-6"></textarea>
-                    </div>
-
-                    <button @click="sendMessage"
-                            :disabled="!canSend"
-                            class="w-12 h-12 rounded-full bg-brand text-white shadow-lg hover:bg-brand-dark transition flex items-center justify-center mb-0.5 disabled:opacity-60 disabled:cursor-not-allowed tap"
-                            aria-label="ارسال">
-                        <i class="fas fa-paper-plane text-lg translate-x-[-2px] translate-y-[1px]"></i>
-                    </button>
-                </div>
-
-                <!-- Context Menu -->
-                <div v-if="contextMenu.visible" 
-                     :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }" 
-                     class="context-menu"
-                     @click.stop>
-                    <template v-if="contextMenu.type === 'message'">
-                        <div @click="setReply(contextMenu.target); contextMenu.visible = false" class="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm flex items-center gap-2">
-                            <i class="fas fa-reply text-gray-400 w-4"></i> پاسخ
-                        </div>
-                        <div v-if="user.role === 'admin'" @click="deleteMessage(contextMenu.target.id); contextMenu.visible = false" class="px-3 py-2 hover:bg-red-50 text-red-600 cursor-pointer text-sm flex items-center gap-2 border-t">
-                            <i class="fas fa-trash w-4"></i> حذف پیام
-                        </div>
-                         <div v-if="canBan && contextMenu.target.sender !== user.username" @click="banUser(contextMenu.target.sender); contextMenu.visible = false" class="px-3 py-2 hover:bg-red-50 text-red-600 cursor-pointer text-sm flex items-center gap-2 border-t">
-                            <i class="fas fa-ban w-4"></i> بن کردن کاربر
-                        </div>
-                    </template>
-                    <template v-if="contextMenu.type === 'user'">
-                         <div @click="startPrivateChat(contextMenu.target); contextMenu.visible = false" class="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm flex items-center gap-2">
-                            <i class="fas fa-comment text-gray-400 w-4"></i> پیام خصوصی
-                        </div>
-                        <template v-if="user.role === 'admin' && contextMenu.target !== user.username">
-                            <div @click="setRole(contextMenu.target, 'vip'); contextMenu.visible = false" class="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm flex items-center gap-2">
-                                <i class="fas fa-gem text-blue-500 w-4"></i> تبدیل به ویژه
-                            </div>
-                             <div @click="setRole(contextMenu.target, 'user'); contextMenu.visible = false" class="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm flex items-center gap-2">
-                                <i class="fas fa-user text-gray-400 w-4"></i> تبدیل به عادی
-                            </div>
-                        </template>
-                        <div v-if="canBan && contextMenu.target !== user.username" @click="banUser(contextMenu.target); contextMenu.visible = false" class="px-3 py-2 hover:bg-red-50 text-red-600 cursor-pointer text-sm flex items-center gap-2 border-t">
-                            <i class="fas fa-ban w-4"></i> بن کردن
-                        </div>
-                    </template>
-                </div>
+            <div class="flex gap-1">
+              <!-- Admin Settings Button -->
+              <button v-if="user.role === 'admin'" @click="showAdminSettings = true"
+                class="text-xs bg-white/20 p-2 rounded hover:bg-white/30" title="تنظیمات"><i
+                  class="fas fa-cog"></i></button>
+              <button @click="logout" class="text-xs bg-white/20 p-2 rounded hover:bg-white/30" title="خروج"><i
+                  class="fas fa-sign-out-alt"></i></button>
             </div>
+          </div>
         </div>
-        
-        <!-- Admin Settings Modal -->
-<div v-if="showAdminSettings" class="fixed inset-0 bg-white/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-    <div class="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden flex flex-col border border-black/5">
+
+        <!-- Tools -->
+        <div class="p-2 border-b bg-gray-50 flex gap-2 overflow-x-auto shrink-0">
+          <button v-if="canBan" @click="openBanList"
+            class="bg-red-100 text-red-600 px-3 py-1 rounded text-xs whitespace-nowrap"><i class="fas fa-ban"></i> لیست
+            سیاه</button>
+        </div>
+
+        <!-- Search -->
+        <div class="p-2 border-b bg-white shrink-0">
+          <input v-model="searchQuery" @input="searchUser" placeholder="جستجوی کاربر..."
+            class="w-full px-3 py-1.5 rounded-lg border text-sm bg-gray-50 focus:outline-none focus:border-brand">
+        </div>
+
+        <!-- Lists -->
+        <div class="flex-1 overflow-y-auto p-2 space-y-4">
+
+          <!-- Search Results -->
+          <div v-if="searchResults.length > 0">
+            <h3 class="text-xs font-bold text-gray-400 mb-2 px-2">نتایج جستجو</h3>
+            <ul>
+              <li v-for="u in searchResults" :key="u" @click="startPrivateChat(u)"
+                class="flex items-center gap-2 p-2 rounded hover:bg-gray-100 cursor-pointer">
+                <div class="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-gray-500"><i
+                    class="fas fa-user"></i></div>
+                <span class="text-sm font-medium">{{ u }}</span>
+              </li>
+            </ul>
+            <hr class="my-2">
+          </div>
+
+          <!-- Channels -->
+          <div>
+            <h3 class="text-xs font-bold text-gray-400 mb-2 px-2 flex justify-between items-center">
+              کانال‌ها
+              <button v-if="canCreateChannel" @click="toggleCreateChannel"
+                class="text-brand hover:text-brand-dark text-xs bg-brand/10 w-5 h-5 rounded-full flex items-center justify-center"><i
+                  class="fas fa-plus"></i></button>
+            </h3>
+
+            <div v-if="showCreateChannelInput" class="mb-2 px-2 flex gap-1 animate-fade-in">
+              <input v-model="newChannelName" class="w-full text-xs p-1 border rounded" placeholder="نام کانال...">
+              <button @click="createChannel" class="bg-green-500 text-white px-2 rounded text-xs"><i
+                  class="fas fa-check"></i></button>
+            </div>
+
+            <ul class="space-y-1">
+              <li v-for="ch in channels" :key="ch"
+                class="group relative p-2 rounded-lg cursor-pointer flex items-center justify-between transition"
+                :class="currentChannel === ch ? 'bg-brand/10 text-brand font-bold' : 'hover:bg-gray-100 text-gray-600'">
+                <div class="flex items-center gap-2 w-full" @click="joinChannel(ch, false)">
+                  <i class="fas fa-hashtag text-xs opacity-50"></i>
+                  <span class="text-sm truncate">{{ ch }}</span>
+                </div>
+                <div v-if="unreadCounts[ch] > 0" class="unread-badge">{{ unreadCounts[ch] }}</div>
+                <button v-if="canCreateChannel && ch !== 'General'" @click.stop="deleteChannel(ch)"
+                  class="text-red-400 hover:text-red-600 px-2 hidden group-hover:block"><i
+                    class="fas fa-trash text-xs"></i></button>
+              </li>
+            </ul>
+          </div>
+
+          <!-- Online Users -->
+          <div>
+            <h3 class="text-xs font-bold text-gray-400 mb-2 px-2 mt-4">کاربران آنلاین ({{ sortedUsers.length }})</h3>
+            <ul class="space-y-1">
+              <li v-for="u in sortedUsers" :key="u.username" @click="handleUserClick(u)"
+                @contextmenu.prevent="showUserContext($event, u.username)"
+                class="flex items-center gap-2 p-2 rounded hover:bg-gray-100 cursor-pointer transition">
+                <div class="relative">
+                  <div
+                    class="w-9 h-9 rounded-full flex items-center justify-center text-gray-600 text-xs font-bold shadow-sm"
+                    :class="{'bg-yellow-100 text-yellow-700': u.role === 'admin', 'bg-blue-100 text-blue-700': u.role === 'vip', 'bg-gray-200': u.role === 'user'}">
+                    <i v-if="u.role === 'admin'" class="fas fa-crown text-sm"></i>
+                    <i v-else-if="u.role === 'vip'" class="fas fa-gem text-sm"></i>
+                    <span v-else>{{ u.username.substring(0,2).toUpperCase() }}</span>
+                  </div>
+                  <div class="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-white rounded-full">
+                  </div>
+                </div>
+                <div class="flex flex-col flex-1">
+                  <span class="text-sm font-medium flex items-center gap-1">
+                    {{ u.username }}
+                    <span v-if="u.username === user.username" class="text-[10px] text-gray-400">(شما)</span>
+                  </span>
+                  <span class="text-[10px] text-gray-400">
+                    {{ u.role === 'admin' ? 'مدیر کل' : (u.role === 'vip' ? 'کاربر ویژه' : 'کاربر') }}
+                  </span>
+                </div>
+                <div v-if="unreadCounts[u.username] > 0" class="unread-badge">{{ unreadCounts[u.username] }}</div>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- Mobile Sidebar Overlay -->
+      <div v-if="showSidebar" @click="showSidebar = false"
+        class="absolute inset-0 bg-white/70 backdrop-blur-sm z-10 md:hidden"></div>
+
+      <!-- Chat Area -->
+      <div class="flex-1 flex flex-col relative h-full min-w-0" style="background: var(--bg-chat);">
+        <!-- Wallpaper -->
+        <div class="absolute inset-0 opacity-5 pointer-events-none"
+          style="background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAIklEQVQIW2NkQAKrVq36zwjjgzhhYWGMYAEYB8RmROaABADeOQ8CXl/xfgAAAABJRU5ErkJggg==')">
+        </div>
+
+        <!-- Header -->
+        <div
+          class="bg-white/90 backdrop-blur-md border-b border-black/5 p-3 flex items-center gap-3 z-20 shrink-0 sticky top-0">
+          <button class="md:hidden text-gray-600 p-2 rounded-lg hover:bg-black/5 tap" @click="showSidebar = true"
+            aria-label="باز کردن منو">
+            <i class="fas fa-bars"></i>
+          </button>
+
+          <div class="flex-1 min-w-0">
+            <h2 class="font-extrabold text-gray-900 flex items-center gap-2 truncate">
+              <span v-if="isPrivateChat" class="text-brand"><i class="fas fa-user-lock"></i></span>
+              <span v-else class="text-gray-500"><i class="fas fa-hashtag"></i></span>
+              <span class="truncate">{{ displayChannelName }}</span>
+            </h2>
+
+            <div class="mt-0.5 flex items-center gap-2 text-[11px] text-gray-500">
+              <span :class="isConnected ? 'text-green-600' : 'text-red-600'" class="inline-flex items-center gap-1">
+                <span class="inline-block w-2 h-2 rounded-full"
+                  :class="isConnected ? 'bg-green-500' : 'bg-red-500'"></span>
+                <span v-if="isConnected">متصل</span>
+                <span v-else>قطع</span>
+              </span>
+              <span class="opacity-60">•</span>
+              <span class="truncate">برای رفتن به خط جدید: Shift + Enter</span>
+            </div>
+          </div>
+
+          <button v-if="showScrollDown" @click="scrollToBottom(true)"
+            class="w-10 h-10 rounded-full bg-black/5 hover:bg-black/10 text-gray-700 flex items-center justify-center tap"
+            aria-label="رفتن به آخر گفتگو">
+            <i class="fas fa-arrow-down"></i>
+          </button>
+        </div>
+
+        <!-- Upload Progress -->
+        <div v-if="isUploading"
+          class="bg-brand-light/20 p-2 text-center text-xs text-brand-dark border-b border-brand-light/30">
+          <div class="flex items-center justify-between px-4 mb-1">
+            <span>در حال ارسال فایل...</span>
+            <span>{{ uploadProgress }}%</span>
+          </div>
+          <div class="w-full bg-gray-200 rounded-full h-1.5">
+            <div class="bg-brand h-1.5 rounded-full transition-all duration-200"
+              :style="{ width: uploadProgress + '%' }"></div>
+          </div>
+        </div>
+
+        <!-- Messages -->
+        <div class="flex-1 overflow-y-auto p-4 space-y-2 min-h-0" id="messages-container" ref="msgContainer">
+          <div v-for="msg in messages" :key="msg.id"
+            :class="['flex w-full', msg.sender === user.username ? 'justify-end' : 'justify-start']"
+            :id="'msg-row-' + msg.id">
+
+            <div @touchstart="touchStart($event, msg)" @touchmove="touchMove($event)" @touchend="touchEnd($event)"
+              @contextmenu.prevent="showContext($event, msg)" :style="getSwipeStyle(msg.id)"
+              class="msg-bubble transition-transform duration-75 ease-out select-none" :id="'msg-' + msg.id">
+
+              <div
+                class="absolute right-[-40px] top-1/2 transform -translate-y-1/2 text-brand text-lg opacity-0 transition-opacity"
+                :class="{'opacity-100': swipeId === msg.id && swipeOffset < -40}">
+                <i class="fas fa-reply"></i>
+              </div>
+
+              <div
+                :class="['rounded-2xl px-4 py-2 shadow-sm text-sm relative border', 
+                                          msg.sender === user.username ? 'bg-brand-light border-brand/20 rounded-tr-none' : 'bg-white border-gray-100 rounded-tl-none']">
+
+                <div v-if="msg.replyTo" @click="scrollToMessage(msg.replyTo.id)"
+                  class="mb-2 p-2 rounded bg-black/5 border-r-4 border-brand cursor-pointer text-xs">
+                  <div class="font-bold text-brand-dark mb-1">{{ msg.replyTo.sender }}</div>
+                  <div class="truncate opacity-70">{{ msg.replyTo.text || 'Media' }}</div>
+                </div>
+
+                <div v-if="msg.sender !== user.username"
+                  class="font-bold text-xs mb-1 text-brand-dark flex items-center gap-1">
+                  {{ msg.sender }}
+                  <i v-if="msg.role === 'admin'" class="fas fa-crown text-yellow-500 text-[10px]"></i>
+                  <i v-else-if="msg.role === 'vip'" class="fas fa-gem text-blue-500 text-[10px]"></i>
+                </div>
+
+                <div class="break-words leading-relaxed" v-if="msg.type === 'text'">{{ msg.text }}</div>
+                <img v-if="msg.type === 'image'" :src="msg.content"
+                  class="max-w-full rounded-lg mt-1 cursor-pointer hover:opacity-90 transition"
+                  @click="viewImage(msg.content)">
+                <video v-if="msg.type === 'video'" :src="msg.content" controls
+                  class="max-w-full rounded-lg mt-1"></video>
+                <audio v-if="msg.type === 'audio'" :src="msg.content" controls
+                  class="mt-1 w-full min-w-[200px]"></audio>
+                <div v-if="msg.type === 'file'" class="mt-1 bg-black/5 p-3 rounded flex items-center gap-3">
+                  <div class="w-10 h-10 bg-brand/20 rounded flex items-center justify-center text-brand text-xl">
+                    <i class="fas fa-file-alt"></i>
+                  </div>
+                  <div class="flex-1 overflow-hidden">
+                    <div class="truncate font-bold text-xs">{{ msg.fileName || 'File' }}</div>
+                    <a :href="msg.content" target="_blank" class="text-[10px] text-blue-500 hover:underline">دانلود
+                      فایل</a>
+                  </div>
+                </div>
+
+                <div
+                  :class="['text-[9px] mt-1 text-left', msg.sender === user.username ? 'text-brand-dark/50' : 'text-gray-400']">
+                  {{ msg.timestamp }}
+                  <i v-if="msg.sender === user.username" class="fas fa-check-double ml-1 text-blue-400"></i>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Reply Input -->
+        <div v-if="replyingTo"
+          class="bg-gray-50 border-t p-2 flex justify-between items-center border-b border-gray-200 shrink-0">
+          <div class="flex-1 text-sm border-r-4 border-brand pr-3">
+            <div class="font-bold text-brand text-xs">پاسخ به {{ replyingTo.sender }}</div>
+            <div class="text-gray-500 text-xs truncate">{{ replyingTo.text || 'File' }}</div>
+          </div>
+          <button @click="cancelReply" class="p-2 text-gray-500 hover:text-red-500"><i
+              class="fas fa-times"></i></button>
+        </div>
+
+        <!-- Input Area -->
+        <div
+          class="p-2 safe-pb bg-white/90 backdrop-blur-md border-t border-black/5 flex items-end gap-2 z-20 shrink-0">
+          <div class="flex pb-2 gap-1">
+            <button class="w-10 h-10 rounded-full hover:bg-black/5 text-gray-600 text-lg transition tap"
+              @click="$refs.fileInput.click()" aria-label="ارسال فایل">
+              <i class="fas fa-paperclip"></i>
+            </button>
+            <input ref="fileInput" type="file" class="hidden" @change="handleFileUpload">
+
+            <button @click="toggleRecording"
+              :class="['w-10 h-10 rounded-full transition text-lg tap', isRecording ? 'text-red-600 bg-red-50 animate-pulse' : 'hover:bg-black/5 text-gray-600']"
+              aria-label="ضبط صدا">
+              <i class="fas fa-microphone"></i>
+            </button>
+          </div>
+
+          <div
+            class="flex-1 bg-gray-100/80 rounded-2xl flex items-end p-2 border border-black/5 focus-within:ring-1 focus-within:ring-brand focus-within:bg-white transition">
+            <textarea v-model="messageText" @keydown="handleComposerKeydown" @input="autoResize" ref="textarea"
+              placeholder="پیام..."
+              class="flex-1 bg-transparent outline-none max-h-40 min-h-[44px] resize-none py-2 px-2 text-sm leading-6"></textarea>
+          </div>
+
+          <button @click="sendMessage" :disabled="!canSend"
+            class="w-12 h-12 rounded-full bg-brand text-white shadow-lg hover:bg-brand-dark transition flex items-center justify-center mb-0.5 disabled:opacity-60 disabled:cursor-not-allowed tap"
+            aria-label="ارسال">
+            <i class="fas fa-paper-plane text-lg translate-x-[-2px] translate-y-[1px]"></i>
+          </button>
+        </div>
+
+        <!-- Context Menu -->
+        <div v-if="contextMenu.visible" :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }"
+          class="context-menu" @click.stop>
+          <template v-if="contextMenu.type === 'message'">
+            <div @click="setReply(contextMenu.target); contextMenu.visible = false"
+              class="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm flex items-center gap-2">
+              <i class="fas fa-reply text-gray-400 w-4"></i> پاسخ
+            </div>
+            <div v-if="user.role === 'admin'" @click="deleteMessage(contextMenu.target.id); contextMenu.visible = false"
+              class="px-3 py-2 hover:bg-red-50 text-red-600 cursor-pointer text-sm flex items-center gap-2 border-t">
+              <i class="fas fa-trash w-4"></i> حذف پیام
+            </div>
+            <div v-if="canBan && contextMenu.target.sender !== user.username"
+              @click="banUser(contextMenu.target.sender); contextMenu.visible = false"
+              class="px-3 py-2 hover:bg-red-50 text-red-600 cursor-pointer text-sm flex items-center gap-2 border-t">
+              <i class="fas fa-ban w-4"></i> بن کردن کاربر
+            </div>
+          </template>
+          <template v-if="contextMenu.type === 'user'">
+            <div @click="startPrivateChat(contextMenu.target); contextMenu.visible = false"
+              class="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm flex items-center gap-2">
+              <i class="fas fa-comment text-gray-400 w-4"></i> پیام خصوصی
+            </div>
+            <template v-if="user.role === 'admin' && contextMenu.target !== user.username">
+              <div @click="setRole(contextMenu.target, 'vip'); contextMenu.visible = false"
+                class="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm flex items-center gap-2">
+                <i class="fas fa-gem text-blue-500 w-4"></i> تبدیل به ویژه
+              </div>
+              <div @click="setRole(contextMenu.target, 'user'); contextMenu.visible = false"
+                class="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm flex items-center gap-2">
+                <i class="fas fa-user text-gray-400 w-4"></i> تبدیل به عادی
+              </div>
+            </template>
+            <div v-if="canBan && contextMenu.target !== user.username"
+              @click="banUser(contextMenu.target); contextMenu.visible = false"
+              class="px-3 py-2 hover:bg-red-50 text-red-600 cursor-pointer text-sm flex items-center gap-2 border-t">
+              <i class="fas fa-ban w-4"></i> بن کردن
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+
+    <!-- Admin Settings Modal -->
+    <div v-if="showAdminSettings"
+      class="fixed inset-0 bg-white/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden flex flex-col border border-black/5">
         <div class="p-4 border-b flex justify-between items-center bg-gray-50">
-            <h3 class="font-bold text-gray-700">تنظیمات چت روم</h3>
-            <button @click="showAdminSettings = false" class="text-gray-400 hover:text-gray-600"><i class="fas fa-times"></i></button>
+          <h3 class="font-bold text-gray-700">تنظیمات چت روم</h3>
+          <button @click="showAdminSettings = false" class="text-gray-400 hover:text-gray-600"><i
+              class="fas fa-times"></i></button>
         </div>
         <div class="p-6 space-y-4">
-            <div class="flex items-center justify-between">
-                <label class="text-sm font-bold text-gray-700">مخفی کردن لیست کاربران</label>
-                <input type="checkbox" v-model="adminSettings.hideUserList" class="w-5 h-5 accent-brand">
-            </div>
-            <p class="text-xs text-gray-500 text-justify leading-relaxed">
-                با فعال‌سازی این گزینه، کاربران عادی قادر به مشاهده لیست افراد آنلاین نخواهند بود و فقط خودشان و ادمین‌ها را می‌بینند.
-            </p>
-            <button @click="saveAdminSettings" class="w-full bg-brand text-white py-2 rounded-lg text-sm font-bold shadow hover:bg-brand-dark transition">
-                ذخیره تنظیمات
-            </button>
+          <div class="flex items-center justify-between">
+            <label class="text-sm font-bold text-gray-700">مخفی کردن لیست کاربران</label>
+            <input type="checkbox" v-model="adminSettings.hideUserList" class="w-5 h-5 accent-brand">
+          </div>
+          <p class="text-xs text-gray-500 text-justify leading-relaxed">
+            با فعال‌سازی این گزینه، کاربران عادی قادر به مشاهده لیست افراد آنلاین نخواهند بود و فقط خودشان و ادمین‌ها را
+            می‌بینند.
+          </p>
+          <button @click="saveAdminSettings"
+            class="w-full bg-brand text-white py-2 rounded-lg text-sm font-bold shadow hover:bg-brand-dark transition">
+            ذخیره تنظیمات
+          </button>
         </div>
+      </div>
     </div>
-</div>
 
-        <!-- Ban List Modal -->
-<div v-if="showBanModal" class="fixed inset-0 bg-white/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-    <div class="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden flex flex-col max-h-[80vh] border border-black/5">
+    <!-- Ban List Modal -->
+    <div v-if="showBanModal"
+      class="fixed inset-0 bg-white/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div
+        class="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden flex flex-col max-h-[80vh] border border-black/5">
         <div class="p-4 border-b flex justify-between items-center bg-gray-50">
-            <h3 class="font-bold text-gray-700">لیست سیاه (بن شده‌ها)</h3>
-            <button @click="showBanModal = false" class="text-gray-400 hover:text-gray-600"><i class="fas fa-times"></i></button>
+          <h3 class="font-bold text-gray-700">لیست سیاه (بن شده‌ها)</h3>
+          <button @click="showBanModal = false" class="text-gray-400 hover:text-gray-600"><i
+              class="fas fa-times"></i></button>
         </div>
         <div class="overflow-y-auto p-4 flex-1">
-            <div v-if="bannedUsers.length === 0" class="text-center text-gray-400 py-4">هیچ کاربری بن نشده است.</div>
-            <ul class="divide-y">
-                <li v-for="u in bannedUsers" :key="u" class="py-3 flex justify-between items-center">
-                    <span class="font-bold text-gray-700">{{ u }}</span>
-                    <button @click="unbanUser(u)" class="text-xs bg-green-100 text-green-700 px-3 py-1 rounded hover:bg-green-200">آزاد کردن</button>
-                </li>
-            </ul>
+          <div v-if="bannedUsers.length === 0" class="text-center text-gray-400 py-4">هیچ کاربری بن نشده است.</div>
+          <ul class="divide-y">
+            <li v-for="u in bannedUsers" :key="u" class="py-3 flex justify-between items-center">
+              <span class="font-bold text-gray-700">{{ u }}</span>
+              <button @click="unbanUser(u)"
+                class="text-xs bg-green-100 text-green-700 px-3 py-1 rounded hover:bg-green-200">آزاد کردن</button>
+            </li>
+          </ul>
         </div>
-    </div>
-</div>
-
-        <!-- Lightbox -->
-<div v-if="lightboxImage" @click="lightboxImage = null" class="fixed inset-0 bg-white/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
-    <img :src="lightboxImage" class="max-w-full max-h-full rounded shadow-2xl">
-    <button class="absolute top-4 right-4 text-gray-700 text-3xl">&times;</button>
-</div>
+      </div>
     </div>
 
-    <script>
-        const { createApp, ref, onMounted, nextTick, computed, watch } = Vue;
-        const socket = io();
+    <!-- Lightbox -->
+    <div v-if="lightboxImage" @click="lightboxImage = null"
+      class="fixed inset-0 bg-white/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
+      <img :src="lightboxImage" class="max-w-full max-h-full rounded shadow-2xl">
+      <button class="absolute top-4 right-4 text-gray-700 text-3xl">&times;</button>
+    </div>
+  </div>
 
-        // Short beep sound base64
-        const notifyAudio = new Audio('data:audio/mp3;base64,//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq');
+  <script>
+    const { createApp, ref, onMounted, nextTick, computed, watch } = Vue;
+    const socket = io();
 
-        createApp({
-            setup() {
-                const isLoggedIn = ref(false);
-                const user = ref({ username: '', role: 'user' });
-                const loginForm = ref({ username: '', password: '' });
-                const error = ref('');
-                const appName = ref('__APP_NAME_PLACEHOLDER__'); 
-                
-                const channels = ref(['General']);
-                const currentChannel = ref('General');
-                const isPrivateChat = ref(false);
-                const displayChannelName = ref('General');
-                const messages = ref([]);
-                const onlineUsers = ref([]);
-                const searchResults = ref([]);
-                const searchQuery = ref('');
-                const bannedUsers = ref([]);
-                const appSettings = ref({ maxFileSizeMB: 50 });
-                const uploadToken = ref('');
-                const unreadCounts = ref({});
-                
-                const showSidebar = ref(false);
-                const messageText = ref('');
-                const showCreateChannelInput = ref(false);
-                const newChannelName = ref('');
-                const lightboxImage = ref(null);
-                const showBanModal = ref(false);
-                const showAdminSettings = ref(false);
-                const adminSettings = ref({ hideUserList: false });
-                
-                const replyingTo = ref(null);
-                const contextMenu = ref({ visible: false, x: 0, y: 0, target: null, type: null });
-                
-                const swipeId = ref(null);
-                const swipeStartX = ref(0);
-                const swipeOffset = ref(0);
-                const isRecording = ref(false);
-                const isUploading = ref(false);
-                const uploadProgress = ref(0);
+    // Short beep sound base64
+    const notifyAudio = new Audio('data:audio/mp3;base64,//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq');
 
-                const isConnected = ref(socket.connected);
-                const isAuthBusy = ref(false);
-                const showScrollDown = ref(false);
+    createApp({
+      setup() {
+        const isLoggedIn = ref(false);
+        const user = ref({ username: '', role: 'user' });
+        const loginForm = ref({ username: '', password: '' });
+        const error = ref('');
+        const appName = ref('__APP_NAME_PLACEHOLDER__');
 
-                const canSend = computed(() => {
-                    return !!messageText.value.trim() && isConnected.value;
-                });
-                
-                let mediaRecorder = null;
-                let audioChunks = [];
-                const fileInput = ref(null);
+        const channels = ref(['General']);
+        const currentChannel = ref('General');
+        const isPrivateChat = ref(false);
+        const displayChannelName = ref('General');
+        const messages = ref([]);
+        const onlineUsers = ref([]);
+        const searchResults = ref([]);
+        const searchQuery = ref('');
+        const bannedUsers = ref([]);
+        const appSettings = ref({ maxFileSizeMB: 50 });
+        const uploadToken = ref('');
+        const unreadCounts = ref({});
 
-                const sortedUsers = computed(() => {
-                    return [...onlineUsers.value].sort((a, b) => {
-                        const roles = { admin: 3, vip: 2, user: 1 };
-                        return roles[b.role] - roles[a.role];
-                    });
-                });
-                
-                const canCreateChannel = computed(() => user.value.role === 'admin' || user.value.role === 'vip');
-                const canBan = computed(() => user.value.role === 'admin' || user.value.role === 'vip');
+        const showSidebar = ref(false);
+        const messageText = ref('');
+        const showCreateChannelInput = ref(false);
+        const newChannelName = ref('');
+        const lightboxImage = ref(null);
+        const showBanModal = ref(false);
+        const showAdminSettings = ref(false);
+        const adminSettings = ref({ hideUserList: false });
 
-                onMounted(() => {
-                    const storedUser = localStorage.getItem('chat_user_name');
-                    if (storedUser) loginForm.value.username = storedUser;
-                    document.addEventListener('click', () => { contextMenu.value.visible = false; });
-                    
-                    // Request Notification Permission on load if supported
-                    if ('Notification' in window && Notification.permission !== 'granted' && Notification.permission !== 'denied') {
-                        Notification.requestPermission();
-                    }
+        const replyingTo = ref(null);
+        const contextMenu = ref({ visible: false, x: 0, y: 0, target: null, type: null });
 
-                    const c = document.getElementById('messages-container');
-                    if (!c) return;
+        const swipeId = ref(null);
+        const swipeStartX = ref(0);
+        const swipeOffset = ref(0);
+        const isRecording = ref(false);
+        const isUploading = ref(false);
+        const uploadProgress = ref(0);
 
-                    c.addEventListener('scroll', () => {
-                        const isNearBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 150;
-                        showScrollDown.value = !isNearBottom;
-                    }, { passive: true });
-                });
+        const isConnected = ref(socket.connected);
+        const isAuthBusy = ref(false);
+        const showScrollDown = ref(false);
 
-                // --- SMART SCROLL ---
-                const scrollToBottom = (force = false) => {
-                    nextTick(() => {
-                        const c = document.getElementById('messages-container');
-                        if (c) c.scrollTop = c.scrollHeight;
-                    });
-                };
-                
-                const checkAndScroll = (sender) => {
-                     const c = document.getElementById('messages-container');
-                     if (!c) return;
-                     // Allow 150px threshold for being "at bottom"
-                     const isNearBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 150;
-                     
-                     // Scroll if user is at bottom OR if user sent the message themselves
-                     if (force || isNearBottom || sender === user.value.username) {
-                         scrollToBottom();
-                     }
-                };
-                
-                // --- Notifications ---
-                const playSound = () => {
-                    try { notifyAudio.currentTime = 0; notifyAudio.play().catch(e => {}); } catch(e){}
-                };
+        const canSend = computed(() => {
+          return !!messageText.value.trim() && isConnected.value;
+        });
 
-                const notify = (title, body) => {
-                    playSound();
-                    if ('Notification' in window && Notification.permission === 'granted') {
-                        new Notification(title, { body, icon: '/favicon.ico' });
-                    }
-                };
+        let mediaRecorder = null;
+        let audioChunks = [];
+        const fileInput = ref(null);
 
-                // --- AUTH & SETUP ---
-                const login = () => {
-                    if(!loginForm.value.username || !loginForm.value.password) {
-                        error.value = 'نام کاربری و رمز عبور الزامی است';
-                        return;
-                    }
-                    error.value = '';
-                    isAuthBusy.value = true;
-                    socket.emit('login', loginForm.value);
-                    if ('Notification' in window) Notification.requestPermission();
-                };
-                const logout = () => {
-                    localStorage.removeItem('chat_user_name');
-                    window.location.reload();
-                };
+        const sortedUsers = computed(() => {
+          return [...onlineUsers.value].sort((a, b) => {
+            const roles = { admin: 3, vip: 2, user: 1 };
+            return roles[b.role] - roles[a.role];
+          });
+        });
 
-                const joinChannel = (ch, isPv) => {
-                    socket.emit('join_channel', ch);
-                    showSidebar.value = false;
-                    unreadCounts.value[ch] = 0; // Reset unread
-                };
-                
-                const startPrivateChat = (targetUsername) => {
-                    socket.emit('join_private', targetUsername);
-                    displayChannelName.value = targetUsername;
-                    isPrivateChat.value = true;
-                    showSidebar.value = false;
-                    searchResults.value = [];
-                    searchQuery.value = '';
-                    unreadCounts.value[targetUsername] = 0;
-                };
+        const canCreateChannel = computed(() => user.value.role === 'admin' || user.value.role === 'vip');
+        const canBan = computed(() => user.value.role === 'admin' || user.value.role === 'vip');
 
-                const sendMessage = () => {
-                if (!canSend.value) return;
+        onMounted(() => {
+          const storedUser = localStorage.getItem('chat_user_name');
+          if (storedUser) loginForm.value.username = storedUser;
+          document.addEventListener('click', () => { contextMenu.value.visible = false; });
+
+          // Request Notification Permission on load if supported
+          if ('Notification' in window && Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+            Notification.requestPermission();
+          }
+
+          const c = document.getElementById('messages-container');
+          if (!c) return;
+
+          c.addEventListener('scroll', () => {
+            const isNearBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 150;
+            showScrollDown.value = !isNearBottom;
+          }, { passive: true });
+        });
+
+        // --- SMART SCROLL ---
+        const scrollToBottom = (force = false) => {
+          nextTick(() => {
+            const c = document.getElementById('messages-container');
+            if (c) c.scrollTop = c.scrollHeight;
+          });
+        };
+
+        const checkAndScroll = (sender) => {
+          const c = document.getElementById('messages-container');
+          if (!c) return;
+          // Allow 150px threshold for being "at bottom"
+          const isNearBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 150;
+
+          // Scroll if user is at bottom OR if user sent the message themselves
+          if (force || isNearBottom || sender === user.value.username) {
+            scrollToBottom();
+          }
+        };
+
+        // --- Notifications ---
+        const playSound = () => {
+          try { notifyAudio.currentTime = 0; notifyAudio.play().catch(e => { }); } catch (e) { }
+        };
+
+        const notify = (title, body) => {
+          playSound();
+          if ('Notification' in window && Notification.permission === 'granted') {
+            new Notification(title, { body, icon: '/favicon.ico' });
+          }
+        };
+
+        // --- AUTH & SETUP ---
+        const login = () => {
+          if (!loginForm.value.username || !loginForm.value.password) {
+            error.value = 'نام کاربری و رمز عبور الزامی است';
+            return;
+          }
+          error.value = '';
+          isAuthBusy.value = true;
+          socket.emit('login', loginForm.value);
+          if ('Notification' in window) Notification.requestPermission();
+        };
+        const logout = () => {
+          localStorage.removeItem('chat_user_name');
+          window.location.reload();
+        };
+
+        const joinChannel = (ch, isPv) => {
+          socket.emit('join_channel', ch);
+          showSidebar.value = false;
+          unreadCounts.value[ch] = 0; // Reset unread
+        };
+
+        const startPrivateChat = (targetUsername) => {
+          socket.emit('join_private', targetUsername);
+          displayChannelName.value = targetUsername;
+          isPrivateChat.value = true;
+          showSidebar.value = false;
+          searchResults.value = [];
+          searchQuery.value = '';
+          unreadCounts.value[targetUsername] = 0;
+        };
+
+        const sendMessage = () => {
+          if (!canSend.value) return;
+          socket.emit('send_message', {
+            text: messageText.value,
+            type: 'text',
+            channel: currentChannel.value,
+            conversationId: currentChannel.value, // ✅ در این نسخه: currentChannel را به عنوان conversationId استفاده می‌کنیم
+            replyTo: replyingTo.value
+          });
+          messageText.value = '';
+          replyingTo.value = null;
+          scrollToBottom(true);
+        };
+
+        const handleComposerKeydown = (e) => {
+          if (e.key !== 'Enter') return;
+
+          if (e.shiftKey) return; // newline
+          e.preventDefault();
+
+          if (!canSend.value) return;
+          sendMessage();
+        };
+
+        // --- UPLOAD LOGIC ---
+        const handleFileUpload = (e) => {
+          const file = e.target.files[0];
+          if (!file) return;
+
+          if (file.size > appSettings.value.maxFileSizeMB * 1024 * 1024) {
+            alert('حجم فایل بیشتر از حد مجاز است (' + appSettings.value.maxFileSizeMB + 'MB)');
+            e.target.value = ''; // Reset
+            return;
+          }
+
+          const formData = new FormData();
+          formData.append('file', file);
+
+          isUploading.value = true;
+          uploadProgress.value = 0;
+
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST', '/upload', true);
+          if (uploadToken.value) xhr.setRequestHeader('X-Upload-Token', uploadToken.value);
+
+          xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable) {
+              uploadProgress.value = Math.round((event.loaded / event.total) * 100);
+            }
+          };
+
+          xhr.onload = () => {
+            if (xhr.status === 200) {
+              try {
+                const res = JSON.parse(xhr.responseText);
+                let type = 'file';
+                if (res.mimetype.startsWith('image/')) type = 'image';
+                else if (res.mimetype.startsWith('video/')) type = 'video';
+                else if (res.mimetype.startsWith('audio/')) type = 'audio';
+
+                const securedUrl = uploadToken.value
+                  ? (res.url + '?t=' + encodeURIComponent(uploadToken.value))
+                  : res.url;
+
                 socket.emit('send_message', {
-                    text: messageText.value,
-                    type: 'text',
-                    channel: currentChannel.value,
-                    conversationId: currentChannel.value, // ✅ در این نسخه: currentChannel را به عنوان conversationId استفاده می‌کنیم
-                    replyTo: replyingTo.value
+                  text: '',
+                  type: type,
+                  content: securedUrl,
+                  fileName: res.filename,
+                  channel: currentChannel.value,
+                  conversationId: currentChannel.value, // ✅ هم‌راستا با sendMessage
+                  replyTo: replyingTo.value
                 });
-                messageText.value = '';
+
                 replyingTo.value = null;
                 scrollToBottom(true);
-                };
-
-                const handleComposerKeydown = (e) => {
-                    if (e.key !== 'Enter') return;
-
-                    if (e.shiftKey) return; // newline
-                    e.preventDefault();
-
-                    if (!canSend.value) return;
-                    sendMessage();
-                };
-                
-                // --- UPLOAD LOGIC ---
-                const handleFileUpload = (e) => {
-                    const file = e.target.files[0];
-                    if(!file) return;
-                    
-                    if (file.size > appSettings.value.maxFileSizeMB * 1024 * 1024) {
-                        alert('حجم فایل بیشتر از حد مجاز است (' + appSettings.value.maxFileSizeMB + 'MB)');
-                        e.target.value = ''; // Reset
-                        return;
-                    }
-
-                    const formData = new FormData();
-                    formData.append('file', file);
-                    
-                    isUploading.value = true;
-                    uploadProgress.value = 0;
-
-                    const xhr = new XMLHttpRequest();
-                    xhr.open('POST', '/upload', true);
-                    if (uploadToken.value) xhr.setRequestHeader('X-Upload-Token', uploadToken.value);
-                    
-                    xhr.upload.onprogress = (event) => {
-                        if (event.lengthComputable) {
-                            uploadProgress.value = Math.round((event.loaded / event.total) * 100);
-                        }
-                    };
-                    
-                    xhr.onload = () => {
-                        if (xhr.status === 200) {
-                            try {
-                                const res = JSON.parse(xhr.responseText);
-                                let type = 'file';
-                                if (res.mimetype.startsWith('image/')) type = 'image';
-                                else if (res.mimetype.startsWith('video/')) type = 'video';
-                                else if (res.mimetype.startsWith('audio/')) type = 'audio';
-                                
-                                const securedUrl = uploadToken.value
-                                ? (res.url + '?t=' + encodeURIComponent(uploadToken.value))
-                                : res.url;
-
-                                socket.emit('send_message', {
-                                text: '',
-                                type: type,
-                                content: securedUrl,
-                                fileName: res.filename,
-                                channel: currentChannel.value,
-                                conversationId: currentChannel.value, // ✅ هم‌راستا با sendMessage
-                                replyTo: replyingTo.value
-                                });
-
-                                replyingTo.value = null;
-                                scrollToBottom(true);
-                            } catch (e) { console.error(e); }
-                        } else {
-                            alert('Upload Failed: Server Error');
-                        }
-                        isUploading.value = false;
-                        if(fileInput.value) fileInput.value.value = '';
-                    };
-                    
-                    xhr.onerror = () => {
-                        isUploading.value = false;
-                        alert('Upload Network Error');
-                        if(fileInput.value) fileInput.value.value = '';
-                    };
-                    
-                    xhr.send(formData);
-                };
-                
-                // Admin Actions
-                const deleteMessage = (msgId) => {
-                    if(confirm('آیا مطمئن هستید؟')) socket.emit('delete_message', msgId);
-                };
-                const createChannel = () => {
-                    if (newChannelName.value) {
-                        socket.emit('create_channel', newChannelName.value);
-                        newChannelName.value = '';
-                        showCreateChannelInput.value = false;
-                    }
-                };
-                const deleteChannel = (ch) => {
-                    if(confirm('حذف کانال؟')) socket.emit('delete_channel', ch);
-                };
-                const banUser = (target) => {
-                    if(confirm('بن کردن کاربر ' + target + ' و حذف پیام‌ها؟')) socket.emit('ban_user', target);
-                };
-                const unbanUser = (target) => socket.emit('unban_user', target);
-                const setRole = (target, role) => socket.emit('set_role', { targetUsername: target, role });
-                const openBanList = () => { socket.emit('get_banned_users'); showBanModal.value = true; };
-                const saveAdminSettings = () => {
-                    socket.emit('update_admin_settings', adminSettings.value);
-                    showAdminSettings.value = false;
-                };
-                
-                // Helpers
-                const handleUserClick = (u) => { if (u.username !== user.value.username) startPrivateChat(u.username); };
-                const showContext = (e, msg) => { contextMenu.value = { visible: true, x: e.pageX, y: e.pageY, target: msg, type: 'message' }; };
-                const showUserContext = (e, targetUsername) => { contextMenu.value = { visible: true, x: e.pageX, y: e.pageY, target: targetUsername, type: 'user' }; };
-                
-                socket.on('connect', () => { isConnected.value = true; });
-                socket.on('disconnect', () => { isConnected.value = false; });
-
-                // --- Socket Events ---
-                socket.on('login_success', (data) => {
-                    isLoggedIn.value = true;
-                    user.value = { username: data.username, role: data.role };
-                    channels.value = data.channels;
-
-                    uploadToken.value = data.uploadToken || '';
-
-                    if(data.settings) {
-                        appSettings.value = data.settings;
-                        if(data.settings.appName) {
-                            appName.value = data.settings.appName;
-                            document.title = data.settings.appName;
-                        }
-                        if(typeof data.settings.hideUserList === 'boolean') {
-                            adminSettings.value.hideUserList = data.settings.hideUserList;
-                        }
-                    }
-                    localStorage.setItem('chat_user_name', data.username);
-                    isAuthBusy.value = false;
-                });
-                socket.on('login_error', (msg) => { error.value = msg; isAuthBusy.value = false; });
-                socket.on('force_disconnect', (msg) => { alert(msg); window.location.reload(); });
-                socket.on('channel_joined', (data) => {
-                    currentChannel.value = data.name;
-                    isPrivateChat.value = data.isPrivate;
-                    if (data.isPrivate) {
-                        const parts = data.name.split('_pv_');
-                        displayChannelName.value = parts.find(u => u !== user.value.username) || 'Private';
-                    } else {
-                        displayChannelName.value = data.name;
-                    }
-                });
-                
-                socket.on('receive_message', (msg) => {
-                    // Check if message belongs to current channel
-                    if (msg.channel === currentChannel.value) {
-                        const c = document.getElementById('messages-container');
-                        const isNearBottom = c ? (c.scrollTop + c.clientHeight >= c.scrollHeight - 150) : true;
-                        
-                        messages.value.push(msg);
-                        
-                        if (msg.sender === user.value.username || isNearBottom) {
-                            scrollToBottom();
-                        }
-                        
-                        // Notify if in channel but window blurred
-                        if (document.hidden && msg.sender !== user.value.username) {
-                             notify(`پیام جدید در ${displayChannelName.value}`, `${msg.sender}: ${msg.text || 'مدیا'}`);
-                        }
-                    } else {
-                        // Handle Unreads
-                        if (msg.channel.includes('_pv_')) {
-                             // Use split to safely find partner
-                             const parts = msg.channel.split('_pv_');
-                             const partner = parts.find(p => p !== user.value.username);
-                             
-                             if (partner) {
-                                 unreadCounts.value[partner] = (unreadCounts.value[partner] || 0) + 1;
-                                 notify(`پیام خصوصی از ${partner}`, msg.text || 'فایل ارسال شد');
-                             }
-                        } else {
-                             // Public Channel logic
-                             unreadCounts.value[msg.channel] = (unreadCounts.value[msg.channel] || 0) + 1;
-                        }
-                    }
-                });
-
-                socket.on('history', (msgs) => {
-                    messages.value = msgs;
-                    scrollToBottom(true);
-                });
-                
-                // Handle Deletions
-                socket.on('message_deleted', (data) => {
-                    if (data.channel === currentChannel.value) {
-                        messages.value = messages.value.filter(m => m.id !== data.id);
-                    }
-                });
-                
-                socket.on('bulk_delete_user', (targetUser) => {
-                    messages.value = messages.value.filter(m => m.sender !== targetUser);
-                });
-
-                socket.on('user_list', (list) => onlineUsers.value = list);
-                socket.on('update_channels', (list) => channels.value = list);
-                socket.on('banned_list', (list) => bannedUsers.value = list);
-                socket.on('action_success', (msg) => alert(msg));
-                socket.on('role_update', (newRole) => { user.value.role = newRole; alert('نقش شما تغییر کرد: ' + newRole); });
-
-                // UI Utils
-                const setReply = (msg) => { replyingTo.value = msg; nextTick(() => document.querySelector('textarea')?.focus()); };
-                const cancelReply = () => replyingTo.value = null;
-                const scrollToMessage = (id) => { document.getElementById('msg-' + id)?.scrollIntoView({ behavior: 'smooth', block: 'center' }); };
-                const touchStart = (e, msg) => { swipeStartX.value = e.touches[0].clientX; swipeId.value = msg.id; swipeOffset.value = 0; };
-                const touchMove = (e) => { if (!swipeId.value) return; const diff = e.touches[0].clientX - swipeStartX.value; if (diff < 0 && diff > -100) swipeOffset.value = diff; };
-                const touchEnd = () => { if (swipeOffset.value < -50) { const msg = messages.value.find(m => m.id === swipeId.value); if (msg) setReply(msg); } swipeId.value = null; swipeOffset.value = 0; };
-                const getSwipeStyle = (id) => (swipeId.value === id ? { transform: `translateX(${swipeOffset.value}px)` } : {});
-                const searchUser = () => { if (searchQuery.value.length > 2) socket.emit('search_user', searchQuery.value); else searchResults.value = []; };
-                const toggleCreateChannel = () => showCreateChannelInput.value = !showCreateChannelInput.value;
-                const viewImage = (src) => lightboxImage.value = src;
-                const autoResize = (e) => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; };
-                
-                const toggleRecording = async () => {
-                     if (isRecording.value) { mediaRecorder.stop(); isRecording.value = false; } else {
-                        try {
-                            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                            mediaRecorder = new MediaRecorder(stream);
-                            audioChunks = [];
-                            mediaRecorder.ondataavailable = event => audioChunks.push(event.data);
-                            mediaRecorder.onstop = () => {
-                                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                                const reader = new FileReader(); reader.readAsDataURL(audioBlob);
-                                reader.onloadend = () => {
-                                    socket.emit('send_message', { text: '', type: 'audio', content: reader.result, channel: currentChannel.value, conversationId: currentChannel.value, replyTo: replyingTo.value });
-                                    replyingTo.value = null;
-                                };
-                            };
-                            mediaRecorder.start(); isRecording.value = true;
-                        } catch(e) { alert('Microphone access denied'); }
-                    }
-                };
-
-                return {
-                    isLoggedIn, user, loginForm, error, login, logout,
-                    channels, currentChannel, joinChannel, displayChannelName, isPrivateChat,
-                    messages, messageText, sendMessage, handleFileUpload, fileInput,
-                    onlineUsers, sortedUsers, searchUser, searchQuery, searchResults, startPrivateChat, handleUserClick,
-                    showSidebar, toggleCreateChannel, showCreateChannelInput, newChannelName, createChannel, deleteChannel,
-                    replyingTo, setReply, cancelReply, deleteMessage,
-                    contextMenu, showContext, showUserContext,
-                    swipeId, touchStart, touchMove, touchEnd, getSwipeStyle,
-                    isRecording, isUploading, uploadProgress, toggleRecording, viewImage, lightboxImage, autoResize, scrollToMessage,
-                    canCreateChannel, canBan, banUser, unbanUser, setRole,
-                    showBanModal, openBanList, bannedUsers, unreadCounts, appName,
-                    showAdminSettings, adminSettings, saveAdminSettings, uploadToken,
-                    isConnected, isAuthBusy, canSend, handleComposerKeydown, showScrollDown, scrollToBottom
-                };
+              } catch (e) { console.error(e); }
+            } else {
+              alert('Upload Failed: Server Error');
             }
-        }).mount('#app');
-    </script>
+            isUploading.value = false;
+            if (fileInput.value) fileInput.value.value = '';
+          };
+
+          xhr.onerror = () => {
+            isUploading.value = false;
+            alert('Upload Network Error');
+            if (fileInput.value) fileInput.value.value = '';
+          };
+
+          xhr.send(formData);
+        };
+
+        // Admin Actions
+        const deleteMessage = (msgId) => {
+          if (confirm('آیا مطمئن هستید؟')) socket.emit('delete_message', msgId);
+        };
+        const createChannel = () => {
+          if (newChannelName.value) {
+            socket.emit('create_channel', newChannelName.value);
+            newChannelName.value = '';
+            showCreateChannelInput.value = false;
+          }
+        };
+        const deleteChannel = (ch) => {
+          if (confirm('حذف کانال؟')) socket.emit('delete_channel', ch);
+        };
+        const banUser = (target) => {
+          if (confirm('بن کردن کاربر ' + target + ' و حذف پیام‌ها؟')) socket.emit('ban_user', target);
+        };
+        const unbanUser = (target) => socket.emit('unban_user', target);
+        const setRole = (target, role) => socket.emit('set_role', { targetUsername: target, role });
+        const openBanList = () => { socket.emit('get_banned_users'); showBanModal.value = true; };
+        const saveAdminSettings = () => {
+          socket.emit('update_admin_settings', adminSettings.value);
+          showAdminSettings.value = false;
+        };
+
+        // Helpers
+        const handleUserClick = (u) => { if (u.username !== user.value.username) startPrivateChat(u.username); };
+        const showContext = (e, msg) => { contextMenu.value = { visible: true, x: e.pageX, y: e.pageY, target: msg, type: 'message' }; };
+        const showUserContext = (e, targetUsername) => { contextMenu.value = { visible: true, x: e.pageX, y: e.pageY, target: targetUsername, type: 'user' }; };
+
+        socket.on('connect', () => { isConnected.value = true; });
+        socket.on('disconnect', () => { isConnected.value = false; });
+
+        // --- Socket Events ---
+        socket.on('login_success', (data) => {
+          isLoggedIn.value = true;
+          user.value = { username: data.username, role: data.role };
+          channels.value = data.channels;
+
+          uploadToken.value = data.uploadToken || '';
+
+          if (data.settings) {
+            appSettings.value = data.settings;
+            if (data.settings.appName) {
+              appName.value = data.settings.appName;
+              document.title = data.settings.appName;
+            }
+            if (typeof data.settings.hideUserList === 'boolean') {
+              adminSettings.value.hideUserList = data.settings.hideUserList;
+            }
+          }
+          localStorage.setItem('chat_user_name', data.username);
+          isAuthBusy.value = false;
+        });
+        socket.on('login_error', (msg) => { error.value = msg; isAuthBusy.value = false; });
+        socket.on('force_disconnect', (msg) => { alert(msg); window.location.reload(); });
+        socket.on('channel_joined', (data) => {
+          currentChannel.value = data.name;
+          isPrivateChat.value = data.isPrivate;
+          if (data.isPrivate) {
+            const parts = data.name.split('_pv_');
+            displayChannelName.value = parts.find(u => u !== user.value.username) || 'Private';
+          } else {
+            displayChannelName.value = data.name;
+          }
+        });
+
+        socket.on('receive_message', (msg) => {
+          // Check if message belongs to current channel
+          if (msg.channel === currentChannel.value) {
+            const c = document.getElementById('messages-container');
+            const isNearBottom = c ? (c.scrollTop + c.clientHeight >= c.scrollHeight - 150) : true;
+
+            messages.value.push(msg);
+
+            if (msg.sender === user.value.username || isNearBottom) {
+              scrollToBottom();
+            }
+
+            // Notify if in channel but window blurred
+            if (document.hidden && msg.sender !== user.value.username) {
+              notify(`پیام جدید در ${displayChannelName.value}`, `${msg.sender}: ${msg.text || 'مدیا'}`);
+            }
+          } else {
+            // Handle Unreads
+            if (msg.channel.includes('_pv_')) {
+              // Use split to safely find partner
+              const parts = msg.channel.split('_pv_');
+              const partner = parts.find(p => p !== user.value.username);
+
+              if (partner) {
+                unreadCounts.value[partner] = (unreadCounts.value[partner] || 0) + 1;
+                notify(`پیام خصوصی از ${partner}`, msg.text || 'فایل ارسال شد');
+              }
+            } else {
+              // Public Channel logic
+              unreadCounts.value[msg.channel] = (unreadCounts.value[msg.channel] || 0) + 1;
+            }
+          }
+        });
+
+        socket.on('history', (msgs) => {
+          messages.value = msgs;
+          scrollToBottom(true);
+        });
+
+        // Handle Deletions
+        socket.on('message_deleted', (data) => {
+          if (data.channel === currentChannel.value) {
+            messages.value = messages.value.filter(m => m.id !== data.id);
+          }
+        });
+
+        socket.on('bulk_delete_user', (targetUser) => {
+          messages.value = messages.value.filter(m => m.sender !== targetUser);
+        });
+
+        socket.on('user_list', (list) => onlineUsers.value = list);
+        socket.on('update_channels', (list) => channels.value = list);
+        socket.on('banned_list', (list) => bannedUsers.value = list);
+        socket.on('action_success', (msg) => alert(msg));
+        socket.on('role_update', (newRole) => { user.value.role = newRole; alert('نقش شما تغییر کرد: ' + newRole); });
+
+        // UI Utils
+        const setReply = (msg) => { replyingTo.value = msg; nextTick(() => document.querySelector('textarea')?.focus()); };
+        const cancelReply = () => replyingTo.value = null;
+        const scrollToMessage = (id) => { document.getElementById('msg-' + id)?.scrollIntoView({ behavior: 'smooth', block: 'center' }); };
+        const touchStart = (e, msg) => { swipeStartX.value = e.touches[0].clientX; swipeId.value = msg.id; swipeOffset.value = 0; };
+        const touchMove = (e) => { if (!swipeId.value) return; const diff = e.touches[0].clientX - swipeStartX.value; if (diff < 0 && diff > -100) swipeOffset.value = diff; };
+        const touchEnd = () => { if (swipeOffset.value < -50) { const msg = messages.value.find(m => m.id === swipeId.value); if (msg) setReply(msg); } swipeId.value = null; swipeOffset.value = 0; };
+        const getSwipeStyle = (id) => (swipeId.value === id ? { transform: `translateX(${swipeOffset.value}px)` } : {});
+        const searchUser = () => { if (searchQuery.value.length > 2) socket.emit('search_user', searchQuery.value); else searchResults.value = []; };
+        const toggleCreateChannel = () => showCreateChannelInput.value = !showCreateChannelInput.value;
+        const viewImage = (src) => lightboxImage.value = src;
+        const autoResize = (e) => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; };
+
+        const toggleRecording = async () => {
+          if (isRecording.value) { mediaRecorder.stop(); isRecording.value = false; } else {
+            try {
+              const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+              mediaRecorder = new MediaRecorder(stream);
+              audioChunks = [];
+              mediaRecorder.ondataavailable = event => audioChunks.push(event.data);
+              mediaRecorder.onstop = () => {
+                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                const reader = new FileReader(); reader.readAsDataURL(audioBlob);
+                reader.onloadend = () => {
+                  socket.emit('send_message', { text: '', type: 'audio', content: reader.result, channel: currentChannel.value, conversationId: currentChannel.value, replyTo: replyingTo.value });
+                  replyingTo.value = null;
+                };
+              };
+              mediaRecorder.start(); isRecording.value = true;
+            } catch (e) { alert('Microphone access denied'); }
+          }
+        };
+
+        return {
+          isLoggedIn, user, loginForm, error, login, logout,
+          channels, currentChannel, joinChannel, displayChannelName, isPrivateChat,
+          messages, messageText, sendMessage, handleFileUpload, fileInput,
+          onlineUsers, sortedUsers, searchUser, searchQuery, searchResults, startPrivateChat, handleUserClick,
+          showSidebar, toggleCreateChannel, showCreateChannelInput, newChannelName, createChannel, deleteChannel,
+          replyingTo, setReply, cancelReply, deleteMessage,
+          contextMenu, showContext, showUserContext,
+          swipeId, touchStart, touchMove, touchEnd, getSwipeStyle,
+          isRecording, isUploading, uploadProgress, toggleRecording, viewImage, lightboxImage, autoResize, scrollToMessage,
+          canCreateChannel, canBan, banUser, unbanUser, setRole,
+          showBanModal, openBanList, bannedUsers, unreadCounts, appName,
+          showAdminSettings, adminSettings, saveAdminSettings, uploadToken,
+          isConnected, isAuthBusy, canSend, handleComposerKeydown, showScrollDown, scrollToBottom
+        };
+      }
+    }).mount('#app');
+  </script>
 </body>
+
 </html>
 
 EOF
