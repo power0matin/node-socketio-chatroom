@@ -61,9 +61,7 @@ case "${COLOR_CHOICE:-1}" in
 esac
 
 echo ""
-echo "[1/6] Updating system..."
-sudo apt-get update -y
-sudo apt-get install -y curl ca-certificates
+
 
 echo "[2/6] Installing Node.js & PM2..."
 
