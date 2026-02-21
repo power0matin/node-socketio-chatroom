@@ -154,7 +154,7 @@ cd "$DIR"
 cat > package.json << 'EOF'
 {
   "name": "node-socketio-chatroom",
-  "version": "1.0.1",
+  "version": "1.0.4",
   "main": "server.js",
   "scripts": { "start": "node server.js" },
   "dependencies": {
@@ -216,10 +216,12 @@ const MESSAGES_FILE = path.join(DATA_DIR, 'messages.json');
 const CHANNELS_FILE = path.join(DATA_DIR, 'channels.json');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 
-// conversation storage (kept, but we will key conversations by channelName for compatibility)
 const CONVERSATIONS_FILE = path.join(DATA_DIR, 'conversations.json');
 const MEMBERSHIPS_FILE   = path.join(DATA_DIR, 'memberships.json');
 const ATTACHMENTS_FILE   = path.join(DATA_DIR, 'attachments.json');
+
+// ✅ NEW: Saved messages store (per-user)
+const SAVED_FILE         = path.join(DATA_DIR, 'saved.json');
 
 function readJsonSafe(file, fallback) {
   try {
@@ -287,9 +289,7 @@ function readJsonSecure(file, fallback) {
     const parsed = JSON.parse(raw);
 
     const key = keyFromHex(appConfig.dataEncKey);
-    if (key && isEncryptedWrapper(parsed)) {
-      return decryptPayload(key, parsed);
-    }
+    if (key && isEncryptedWrapper(parsed)) return decryptPayload(key, parsed);
 
     return parsed;
   } catch {
@@ -299,11 +299,7 @@ function readJsonSecure(file, fallback) {
 
 function atomicWriteJsonSecure(file, obj, mode = 0o600) {
   const key = keyFromHex(appConfig.dataEncKey);
-
-  const payload = key
-    ? encryptPayload(key, obj)
-    : obj;
-
+  const payload = key ? encryptPayload(key, obj) : obj;
   atomicWriteJson(file, payload, mode);
 }
 
@@ -317,7 +313,10 @@ let appConfig = {
   hideUserList: false,
   allowedOrigins: '*',
   protectUploads: true,
-  dataEncKey: ''
+  dataEncKey: '',
+  // ✅ NEW: channel access policy
+  accessMode: 'restricted', // 'restricted' | 'open'
+  defaultChannelsForNewUsers: [] // e.g. ['General'] if you want
 };
 
 function normalizeOrigins(val) {
@@ -337,7 +336,7 @@ function loadAndSecureConfig(force = false) {
     try { stat = fs.statSync(CONFIG_FILE); } catch { stat = null; }
 
     const mtimeMs = stat ? stat.mtimeMs : 0;
-    if (!force && mtimeMs && mtimeMs === lastConfigMtimeMs) return false; // no change
+    if (!force && mtimeMs && mtimeMs === lastConfigMtimeMs) return false;
 
     let saveNeeded = false;
     const fileConfig = readJsonSafe(CONFIG_FILE, null);
@@ -345,14 +344,12 @@ function loadAndSecureConfig(force = false) {
     if (fileConfig) appConfig = { ...appConfig, ...fileConfig };
     else saveNeeded = true;
 
-    // migrate plaintext adminPass -> hash (backward compat)
     if (appConfig.adminPass && !appConfig.adminPassHash) {
       appConfig.adminPassHash = bcrypt.hashSync(String(appConfig.adminPass), 12);
       delete appConfig.adminPass;
       saveNeeded = true;
     }
 
-    // ensure hash format
     if (appConfig.adminPassHash && !String(appConfig.adminPassHash).startsWith('$2')) {
       appConfig.adminPassHash = bcrypt.hashSync(String(appConfig.adminPassHash), 12);
       saveNeeded = true;
@@ -360,9 +357,17 @@ function loadAndSecureConfig(force = false) {
 
     appConfig.allowedOrigins = normalizeOrigins(appConfig.allowedOrigins);
 
+    if (!['restricted', 'open'].includes(String(appConfig.accessMode || 'restricted'))) {
+      appConfig.accessMode = 'restricted';
+      saveNeeded = true;
+    }
+    if (!Array.isArray(appConfig.defaultChannelsForNewUsers)) {
+      appConfig.defaultChannelsForNewUsers = [];
+      saveNeeded = true;
+    }
+
     if (saveNeeded) atomicWriteJson(CONFIG_FILE, appConfig, 0o600);
 
-    // update mtime tracking after potential write
     try {
       const st2 = fs.statSync(CONFIG_FILE);
       lastConfigMtimeMs = st2.mtimeMs;
@@ -370,14 +375,13 @@ function loadAndSecureConfig(force = false) {
       lastConfigMtimeMs = mtimeMs || 0;
     }
 
-    return true; // changed
+    return true;
   } catch (e) {
     console.error('Error loading config:', e);
     return false;
   }
 }
 
-// Initial load
 loadAndSecureConfig(true);
 
 const PORT = Number(process.env.PORT || appConfig.port || 3000);
@@ -406,14 +410,15 @@ let users = {};
 let persistentUsers = {};
 let channels = ['General', 'Random'];
 
-// IMPORTANT: We keep messages keyed by conversationId (which will be channelName)
 let messages = {};
 let userRateLimits = {};
 
-// conversations/memberships are kept, but keyed by channelName (public) or dmKey (dm)
 let conversations = {};
 let memberships = {};
 let attachments = {};
+
+// ✅ NEW: saved messages per user
+let saved = {}; // { [username]: [ {id, from, channel, text, type, content, fileName, savedAt, originalId, originalAt} ] }
 
 // upload auth: token -> expiry
 const uploadTokens = new Map();
@@ -431,6 +436,7 @@ messages = readJsonSecure(MESSAGES_FILE, {});
 conversations = readJsonSecure(CONVERSATIONS_FILE, {});
 memberships = readJsonSecure(MEMBERSHIPS_FILE, {});
 attachments = readJsonSecure(ATTACHMENTS_FILE, {});
+saved = readJsonSecure(SAVED_FILE, {});
 
 // -------------------- Helpers --------------------
 function cleanUsername(username) {
@@ -460,8 +466,13 @@ function addMember(conversationId, username, role = 'member') {
   }
 }
 
+function removeMember(conversationId, username) {
+  if (!memberships[conversationId]) return;
+  delete memberships[conversationId][username];
+}
+
 function ensurePublicConversation(channelName, createdBy = 'system') {
-  const id = channelName; // ✅ key by channelName (compat with UI)
+  const id = channelName;
   if (!conversations[id]) {
     conversations[id] = {
       id,
@@ -477,7 +488,6 @@ function ensurePublicConversation(channelName, createdBy = 'system') {
 }
 
 function dmKeyFor(u1, u2) {
-  // UI expects "_pv_" in multiple places; keep consistent.
   const a = String(u1 || '').trim();
   const b = String(u2 || '').trim();
   return [a, b].sort().join('_pv_');
@@ -502,6 +512,31 @@ function getOrCreateDMConversation(u1, u2) {
   return conversations[key];
 }
 
+// ✅ NEW: Saved conversation id (virtual)
+function savedConvIdFor(username) {
+  return `__saved__${String(username || '').trim()}`;
+}
+
+// ✅ NEW: access checks
+function canAccessChannel(username, role, channelName) {
+  const ch = String(channelName || '').trim();
+  if (!ch) return false;
+  if (role === 'admin') return true;
+
+  // open mode: all users can access public channels
+  if (appConfig.accessMode === 'open') return true;
+
+  // restricted: must be explicitly member
+  return isMember(ch, username);
+}
+
+function listAccessibleChannels(username, role) {
+  if (role === 'admin') return [...channels];
+  if (appConfig.accessMode === 'open') return [...channels];
+  // restricted
+  return channels.filter(ch => isMember(ch, username));
+}
+
 function saveData() {
   try {
     atomicWriteJsonSecure(USERS_FILE, persistentUsers, 0o600);
@@ -510,6 +545,7 @@ function saveData() {
     atomicWriteJsonSecure(CONVERSATIONS_FILE, conversations, 0o600);
     atomicWriteJsonSecure(MEMBERSHIPS_FILE, memberships, 0o600);
     atomicWriteJsonSecure(ATTACHMENTS_FILE, attachments, 0o600);
+    atomicWriteJsonSecure(SAVED_FILE, saved, 0o600);
   } catch (e) {
     console.error('Error saving data', e);
   }
@@ -576,7 +612,6 @@ const storage = multer.diskStorage({
   }
 });
 
-// -------------------- Upload (optimized) --------------------
 let uploadSingle = null;
 let lastUploadLimitBytes = 0;
 
@@ -599,23 +634,17 @@ function rebuildUploadMiddleware() {
   uploadSingle = upload.single('file');
 }
 
-// initial build
 rebuildUploadMiddleware();
 
-// Periodic refresh (cheap)
 setInterval(() => {
   const changed = loadAndSecureConfig(false);
-  if (changed) {
-    // if config changed, rebuild dependent parts (multer limits, etc.)
-    rebuildUploadMiddleware();
-  }
+  if (changed) rebuildUploadMiddleware();
 }, 5000).unref();
 
-// Protect downloads if enabled (NO per-request config reload)
+// Protect downloads if enabled
 app.use('/uploads', (req, res, next) => {
   if (!appConfig.protectUploads) return next();
 
-  // Prefer header, but keep query for backward-compat
   const tok = String(req.headers['x-upload-token'] || req.query.t || '');
   const rec = uploadTokens.get(tok);
   if (!rec || rec.exp <= Date.now()) return res.status(401).send('Unauthorized');
@@ -640,6 +669,7 @@ app.post('/upload', uploadLimiter, (req, res) => {
     res.json({ url: '/uploads/' + req.file.filename, filename: cleanOriginal, size: req.file.size, mimetype: req.file.mimetype });
   });
 });
+
 // -------------------- Online users list --------------------
 function getUniqueOnlineUsers() {
   const unique = {};
@@ -672,9 +702,8 @@ function getBannedUsers() {
   return Object.keys(persistentUsers).filter(u => persistentUsers[u]?.isBanned);
 }
 
-// -------------------- Socket events --------------------
+// -------------------- Login rate limit --------------------
 const loginAttempts = new Map();
-// key => { count, first, last }
 
 function getSocketIp(socket) {
   const xf = socket.handshake.headers['x-forwarded-for'];
@@ -691,8 +720,8 @@ function isLoginLimited(ip, username) {
   const now = Date.now();
   const rec = loginAttempts.get(key);
 
-  const windowMs = 10 * 60 * 1000; // 10 min
-  const max = 12;                  // 12 attempts / 10 min per ip+user
+  const windowMs = 10 * 60 * 1000;
+  const max = 12;
 
   if (!rec) return false;
 
@@ -723,7 +752,6 @@ function clearLoginFails(ip, username) {
   loginAttempts.delete(loginKey(ip, username));
 }
 
-// cleanup
 setInterval(() => {
   const now = Date.now();
   const windowMs = 10 * 60 * 1000;
@@ -734,6 +762,45 @@ setInterval(() => {
 
 // -------------------- Socket events --------------------
 io.on('connection', (socket) => {
+
+  // ✅ safe channel join (enforced access)
+  function joinChannelCompat(sock, channelName) {
+    const user = users[sock.id];
+    if (!user) return;
+
+    const clean = cleanChannelName(channelName);
+    if (!clean) return;
+
+    // channel must exist
+    if (!channels.includes(clean)) return sock.emit('error', 'کانال وجود ندارد.');
+
+    // enforce access
+    if (!canAccessChannel(user.username, user.role, clean)) {
+      return sock.emit('access_denied', { channel: clean, message: 'شما به این کانال دسترسی ندارید.' });
+    }
+
+    ensurePublicConversation(clean, 'system');
+    addMember(clean, user.username, 'member');
+
+    sock.join(clean);
+    sock.emit('channel_joined', { name: clean, isPrivate: false });
+    sock.emit('history', Array.isArray(messages[clean]) ? messages[clean] : []);
+  }
+
+  function emitAccessSnapshotToAdmin(adminSocket) {
+    const u = users[adminSocket.id];
+    if (!u || u.role !== 'admin') return;
+
+    const result = {};
+    for (const uname of Object.keys(persistentUsers)) {
+      result[uname] = {};
+      for (const ch of channels) {
+        result[uname][ch] = isMember(ch, uname);
+      }
+    }
+    adminSocket.emit('admin_access_snapshot', { channels, map: result });
+  }
+
   socket.on('login', ({ username, password }) => {
     loadAndSecureConfig();
 
@@ -755,26 +822,31 @@ io.on('connection', (socket) => {
       const uploadToken = crypto.randomBytes(24).toString('hex');
       uploadTokens.set(uploadToken, { username: u, exp: Date.now() + 6 * 60 * 60 * 1000 });
 
-      // Ensure public conversations for channels
       for (const ch of channels) ensurePublicConversation(ch, 'system');
+
+      // admin always member to all channels in restricted mode
+      if (appConfig.accessMode === 'restricted') {
+        for (const ch of channels) addMember(ch, u, 'owner');
+      }
 
       socket.emit('login_success', {
         username: u,
         role: 'admin',
-        channels,
+        channels: [...channels],
         settings: {
           maxFileSizeMB: appConfig.maxFileSizeMB,
           appName: appConfig.appName,
-          hideUserList: appConfig.hideUserList
+          hideUserList: appConfig.hideUserList,
+          accessMode: appConfig.accessMode
         },
         uploadToken
       });
 
-      // auto-join General
-      const general = ensurePublicConversation('General', 'system');
-      joinChannelCompat(socket, general.id);
+      // auto-join General if exists
+      if (channels.includes('General')) joinChannelCompat(socket, 'General');
 
       broadcastUserList();
+      emitAccessSnapshotToAdmin(socket);
       return;
     }
 
@@ -790,51 +862,51 @@ io.on('connection', (socket) => {
         isBanned: false,
         created_at: Date.now()
       };
+
+      // ✅ optional: default channels for new users
+      if (appConfig.accessMode === 'restricted' && Array.isArray(appConfig.defaultChannelsForNewUsers)) {
+        for (const ch of appConfig.defaultChannelsForNewUsers) {
+          const cleanCh = cleanChannelName(ch);
+          if (cleanCh && channels.includes(cleanCh)) addMember(cleanCh, u, 'member');
+        }
+      }
     }
 
     clearLoginFails(ip, u);
     persistentUsers[u].last_seen = Date.now();
-    saveData();
 
     const role = persistentUsers[u].role || 'user';
     users[socket.id] = { username: u, role };
+
+    // ensure saved structure exists
+    if (!saved[u]) saved[u] = [];
 
     const uploadToken = crypto.randomBytes(24).toString('hex');
     uploadTokens.set(uploadToken, { username: u, exp: Date.now() + 6 * 60 * 60 * 1000 });
 
     for (const ch of channels) ensurePublicConversation(ch, 'system');
 
+    const accessible = listAccessibleChannels(u, role);
+
     socket.emit('login_success', {
       username: u,
       role,
-      channels,
+      channels: accessible,
       settings: {
         maxFileSizeMB: appConfig.maxFileSizeMB,
         appName: appConfig.appName,
-        hideUserList: appConfig.hideUserList
+        hideUserList: appConfig.hideUserList,
+        accessMode: appConfig.accessMode
       },
       uploadToken
     });
 
-    joinChannelCompat(socket, 'General');
+    // auto-join first accessible channel (if any)
+    if (accessible.length > 0) joinChannelCompat(socket, accessible[0]);
+
+    saveData();
     broadcastUserList();
   });
-
-  // ✅ Compatibility: treat channelName as conversationId and room name
-  function joinChannelCompat(sock, channelName) {
-    const user = users[sock.id];
-    if (!user) return;
-
-    const clean = cleanChannelName(channelName);
-    if (!clean) return;
-
-    ensurePublicConversation(clean, 'system');
-    addMember(clean, user.username, 'member');
-
-    sock.join(clean);
-    sock.emit('channel_joined', { name: clean, isPrivate: false });
-    sock.emit('history', Array.isArray(messages[clean]) ? messages[clean] : []);
-  }
 
   socket.on('join_channel', (channel) => {
     joinChannelCompat(socket, channel);
@@ -847,6 +919,11 @@ io.on('connection', (socket) => {
     const cleanTarget = cleanUsername(targetUser);
     if (!cleanTarget || cleanTarget === currentUser.username) return;
 
+    // DM allowed, but deny if target is banned/non-existent
+    if (!persistentUsers[cleanTarget] || persistentUsers[cleanTarget]?.isBanned) {
+      return socket.emit('error', 'کاربر مقصد وجود ندارد یا مسدود شده است.');
+    }
+
     const dm = getOrCreateDMConversation(currentUser.username, cleanTarget);
 
     socket.join(dm.id);
@@ -854,7 +931,75 @@ io.on('connection', (socket) => {
     socket.emit('history', Array.isArray(messages[dm.id]) ? messages[dm.id] : []);
   });
 
-  // ✅ create channel + ensure conversation exists
+  // -------------------- Saved Messages --------------------
+  socket.on('get_saved', () => {
+    const user = users[socket.id];
+    if (!user) return;
+    const list = Array.isArray(saved[user.username]) ? saved[user.username] : [];
+    socket.emit('saved_list', list);
+  });
+
+  socket.on('save_message', (payload) => {
+    const user = users[socket.id];
+    if (!user) return;
+
+    const item = payload && typeof payload === 'object' ? payload : null;
+    if (!item) return;
+
+    const originalId = String(item.originalId || item.id || '').trim();
+    const from = cleanUsername(item.from || item.sender || '');
+    const channel = cleanChannelName(item.channel || item.conversationId || '');
+    const type = String(item.type || 'text');
+    const text = cleanText(item.text || '', 1000);
+    const content = (typeof item.content === 'string') ? item.content : undefined;
+    const fileName = item.fileName ? xss(String(item.fileName)).substring(0, 120) : undefined;
+
+    if (!originalId || !from) return;
+
+    if (!saved[user.username]) saved[user.username] = [];
+
+    // prevent duplicates per originalId
+    if (saved[user.username].some(x => x.originalId === originalId)) {
+      return socket.emit('action_success', 'این پیام قبلاً ذخیره شده است.');
+    }
+
+    const rec = {
+      id: crypto.randomBytes(12).toString('hex'),
+      originalId,
+      from,
+      channel: channel || '(unknown)',
+      type,
+      text,
+      content,
+      fileName,
+      originalAt: item.originalAt || null,
+      savedAt: Date.now()
+    };
+
+    saved[user.username].unshift(rec);
+    if (saved[user.username].length > 500) saved[user.username].pop();
+
+    saveData();
+    socket.emit('saved_list', saved[user.username]);
+    socket.emit('action_success', 'پیام ذخیره شد ✅');
+  });
+
+  socket.on('unsave_message', (savedId) => {
+    const user = users[socket.id];
+    if (!user) return;
+
+    const id = String(savedId || '').trim();
+    if (!id) return;
+
+    const list = Array.isArray(saved[user.username]) ? saved[user.username] : [];
+    saved[user.username] = list.filter(x => x.id !== id);
+
+    saveData();
+    socket.emit('saved_list', saved[user.username]);
+    socket.emit('action_success', 'از ذخیره‌ها حذف شد.');
+  });
+
+  // -------------------- Channel management --------------------
   socket.on('create_channel', (channelName) => {
     const user = users[socket.id];
     if (!user || (user.role !== 'admin' && user.role !== 'vip')) return;
@@ -865,11 +1010,24 @@ io.on('connection', (socket) => {
     if (!channels.includes(clean)) channels.push(clean);
     ensurePublicConversation(clean, user.username);
 
+    // creator gets access in restricted mode
+    if (appConfig.accessMode === 'restricted') addMember(clean, user.username, 'owner');
+
+    // admin gets access always
+    if (appConfig.accessMode === 'restricted') addMember(clean, appConfig.adminUser, 'owner');
+
     io.emit('update_channels', channels);
     saveData();
+
+    // push filtered channels to each user
+    io.sockets.sockets.forEach((s) => {
+      const u = users[s.id];
+      if (!u) return;
+      const list = listAccessibleChannels(u.username, u.role);
+      s.emit('channels_list', list);
+    });
   });
 
-  // ✅ delete channel + cleanup all related data
   socket.on('delete_channel', (channelName) => {
     const user = users[socket.id];
     if (!user || (user.role !== 'admin' && user.role !== 'vip')) return;
@@ -887,6 +1045,15 @@ io.on('connection', (socket) => {
 
     io.emit('update_channels', channels);
     saveData();
+
+    io.sockets.sockets.forEach((s) => {
+      const u = users[s.id];
+      if (!u) return;
+      const list = listAccessibleChannels(u.username, u.role);
+      s.emit('channels_list', list);
+      // kick UI if user was in deleted channel
+      s.emit('channel_deleted', clean);
+    });
   });
 
   socket.on('update_admin_settings', (newSettings) => {
@@ -895,12 +1062,81 @@ io.on('connection', (socket) => {
 
     if (typeof newSettings?.hideUserList === 'boolean') {
       appConfig.hideUserList = newSettings.hideUserList;
-      atomicWriteJson(CONFIG_FILE, appConfig, 0o600);
-      broadcastUserList();
-      socket.emit('action_success', 'تنظیمات با موفقیت ذخیره شد.');
     }
+    if (typeof newSettings?.accessMode === 'string' && ['restricted', 'open'].includes(newSettings.accessMode)) {
+      appConfig.accessMode = newSettings.accessMode;
+    }
+
+    atomicWriteJson(CONFIG_FILE, appConfig, 0o600);
+
+    // refresh channels list for everyone
+    io.sockets.sockets.forEach((s) => {
+      const u = users[s.id];
+      if (!u) return;
+      const list = listAccessibleChannels(u.username, u.role);
+      s.emit('channels_list', list);
+    });
+
+    broadcastUserList();
+    socket.emit('action_success', 'تنظیمات با موفقیت ذخیره شد.');
+    emitAccessSnapshotToAdmin(socket);
   });
 
+  // ✅ NEW: admin UI events to grant/revoke channel access
+  socket.on('admin_get_user_access', (targetUsername) => {
+    const actor = users[socket.id];
+    if (!actor || actor.role !== 'admin') return;
+
+    const t = cleanUsername(targetUsername);
+    if (!t || !persistentUsers[t]) return;
+
+    const map = {};
+    for (const ch of channels) map[ch] = isMember(ch, t);
+
+    socket.emit('admin_user_access', { username: t, map, channels });
+  });
+
+  socket.on('admin_set_user_access', ({ targetUsername, channel, allow }) => {
+    const actor = users[socket.id];
+    if (!actor || actor.role !== 'admin') return;
+
+    const t = cleanUsername(targetUsername);
+    const ch = cleanChannelName(channel);
+    const okAllow = !!allow;
+
+    if (!t || !persistentUsers[t]) return;
+    if (!ch || !channels.includes(ch)) return;
+
+    if (okAllow) addMember(ch, t, 'member');
+    else removeMember(ch, t);
+
+    saveData();
+
+    // update target user's channels list live (if online)
+    const targetSocketIds = Object.keys(users).filter(id => users[id]?.username === t);
+    for (const sid of targetSocketIds) {
+      const s = io.sockets.sockets.get(sid);
+      if (!s) continue;
+      const list = listAccessibleChannels(t, users[sid].role);
+      s.emit('channels_list', list);
+
+      // if they are currently inside revoked channel -> force leave
+      if (!okAllow) {
+        s.leave(ch);
+        s.emit('access_revoked', { channel: ch, message: 'دسترسی شما به این کانال توسط ادمین برداشته شد.' });
+      }
+    }
+
+    socket.emit('action_success', `دسترسی ${okAllow ? 'داده شد' : 'برداشته شد'}: ${t} -> ${ch}`);
+    socket.emit('admin_user_access', {
+      username: t,
+      map: Object.fromEntries(channels.map(c => [c, isMember(c, t)])),
+      channels
+    });
+    emitAccessSnapshotToAdmin(socket);
+  });
+
+  // -------------------- Moderation --------------------
   socket.on('ban_user', (targetUsername) => {
     const actor = users[socket.id];
     if (!actor || (actor.role !== 'admin' && actor.role !== 'vip')) return;
@@ -911,7 +1147,6 @@ io.on('connection', (socket) => {
 
     persistentUsers[t].isBanned = true;
 
-    // wipe messages across all rooms
     for (const key of Object.keys(messages)) {
       if (Array.isArray(messages[key])) messages[key] = messages[key].filter(m => m.sender !== t);
     }
@@ -963,6 +1198,10 @@ io.on('connection', (socket) => {
       if (targetSocketId) {
         users[targetSocketId].role = role;
         io.to(targetSocketId).emit('role_update', role);
+
+        // refresh channels list as role might affect (admin only in our model)
+        const s = io.sockets.sockets.get(targetSocketId);
+        if (s) s.emit('channels_list', listAccessibleChannels(t, role));
       }
 
       broadcastUserList();
@@ -970,6 +1209,7 @@ io.on('connection', (socket) => {
     }
   });
 
+  // -------------------- Messaging (with access enforcement) --------------------
   socket.on('send_message', (data) => {
     const user = users[socket.id];
     if (!user) return;
@@ -983,8 +1223,23 @@ io.on('connection', (socket) => {
     const conversationId = cleanChannelName(data?.conversationId || '');
     if (!conversationId) return;
 
-    // ✅ ensure conversation exists for channel-based rooms
-    if (!conversations[conversationId]) ensurePublicConversation(conversationId, 'system');
+    // if public channel, enforce access
+    const isDM = conversationId.includes('_pv_');
+    if (!isDM) {
+      if (!channels.includes(conversationId)) return socket.emit('error', 'کانال وجود ندارد.');
+      if (!canAccessChannel(user.username, user.role, conversationId)) {
+        return socket.emit('access_denied', { channel: conversationId, message: 'شما به این کانال دسترسی ندارید.' });
+      }
+      if (!conversations[conversationId]) ensurePublicConversation(conversationId, 'system');
+    } else {
+      // DM: ensure membership exists
+      if (!conversations[conversationId]) {
+        // lazily create if structure matches two users
+        const parts = conversationId.split('_pv_');
+        if (parts.length !== 2) return socket.emit('error', 'گفتگوی خصوصی نامعتبر است.');
+        getOrCreateDMConversation(parts[0], parts[1]);
+      }
+    }
 
     const cleanTextVal = cleanText(data?.text, 1000);
     const cleanFileName = data?.fileName ? xss(String(data.fileName)).substring(0, 120) : undefined;
@@ -1003,7 +1258,7 @@ io.on('connection', (socket) => {
       content,
       fileName: cleanFileName,
       conversationId,
-      channel: conversationId, // ✅ UI compatibility
+      channel: conversationId,
       replyTo: data?.replyTo || null,
       timestamp: new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }),
       role: user.role
@@ -1091,18 +1346,16 @@ cat > public/index.html << 'EOF'
       }
     }
   </script>
+
   <style>
     :root {
-      /* Replaced by installer */
       --brand-color: __COLOR_DEFAULT__;
       --brand-dark: __COLOR_DARK__;
       --brand-light: __COLOR_LIGHT__;
 
-      /* Light-only base (clean + cohesive) */
       --bg-app: #F7F8FC;
       --bg-chat: #F2F4F8;
 
-      /* Surfaces */
       --panel: rgba(255, 255, 255, 0.82);
       --panel-2: rgba(255, 255, 255, 0.66);
 
@@ -1112,7 +1365,6 @@ cat > public/index.html << 'EOF'
       --border: rgba(15, 23, 42, 0.10);
       --border-strong: rgba(15, 23, 42, 0.14);
 
-      /* Shadows (soft, modern) */
       --shadow: 0 18px 55px rgba(2, 6, 23, 0.10);
       --shadow-soft: 0 10px 28px rgba(2, 6, 23, 0.08);
 
@@ -1120,7 +1372,6 @@ cat > public/index.html << 'EOF'
       --radius-lg: 16px;
       --radius-md: 14px;
 
-      /* Focus ring uses brand (dynamic) */
       --ring: 0 0 0 4px color-mix(in srgb, var(--brand-color) 22%, transparent);
     }
 
@@ -1157,7 +1408,6 @@ cat > public/index.html << 'EOF'
       border-radius: 12px;
     }
 
-    /* Scrollbars (subtle) */
     ::-webkit-scrollbar {
       width: 6px;
       height: 6px;
@@ -1172,7 +1422,6 @@ cat > public/index.html << 'EOF'
       background: rgba(107, 114, 128, 0.42);
     }
 
-    /* Panels: glassy but restrained */
     .panel {
       background: var(--panel);
       border: 1px solid var(--border);
@@ -1191,14 +1440,12 @@ cat > public/index.html << 'EOF'
       -webkit-backdrop-filter: blur(12px);
     }
 
-    /* Message bubble sizing + readability */
     .msg-bubble {
       max-width: min(85%, 720px);
       position: relative;
       will-change: transform;
     }
 
-    /* Context menu: subtle glass */
     .context-menu {
       position: absolute;
       background: rgba(255, 255, 255, 0.90);
@@ -1208,7 +1455,7 @@ cat > public/index.html << 'EOF'
       box-shadow: 0 16px 44px rgba(0, 0, 0, 0.14);
       padding: 6px;
       z-index: 120;
-      min-width: 160px;
+      min-width: 180px;
       overflow: hidden;
       border: 1px solid rgba(15, 23, 42, 0.08);
       color: var(--text);
@@ -1246,7 +1493,6 @@ cat > public/index.html << 'EOF'
 </head>
 
 <body class="w-full overflow-hidden flex flex-col dir-rtl">
-  <!-- Application Logic remains the same, managed by Vue -->
   <div id="app" class="h-full flex flex-col w-full">
 
     <!-- Login Screen -->
@@ -1295,6 +1541,7 @@ cat > public/index.html << 'EOF'
       <!-- Sidebar -->
       <div
         :class="['absolute md:relative z-20 h-full bg-white border-l shadow-xl md:shadow-none transition-transform duration-300 w-72 flex flex-col shrink-0', showSidebar ? 'translate-x-0' : 'translate-x-full md:translate-x-0']">
+
         <!-- User Info -->
         <div class="p-4 bg-gradient-to-l from-brand to-brand-dark text-white shadow shrink-0">
           <div class="flex justify-between items-center">
@@ -1309,7 +1556,6 @@ cat > public/index.html << 'EOF'
               </p>
             </div>
             <div class="flex gap-1">
-              <!-- Admin Settings Button -->
               <button v-if="user.role === 'admin'" @click="showAdminSettings = true"
                 class="text-xs bg-white/20 p-2 rounded hover:bg-white/30" title="تنظیمات"><i
                   class="fas fa-cog"></i></button>
@@ -1321,9 +1567,15 @@ cat > public/index.html << 'EOF'
 
         <!-- Tools -->
         <div class="p-2 border-b bg-gray-50 flex gap-2 overflow-x-auto shrink-0">
+          <button @click="openSavedModal"
+            class="bg-brand/10 text-brand px-3 py-1 rounded text-xs whitespace-nowrap">
+            <i class="fas fa-bookmark"></i> پیام‌های ذخیره‌شده
+          </button>
+
           <button v-if="canBan" @click="openBanList"
-            class="bg-red-100 text-red-600 px-3 py-1 rounded text-xs whitespace-nowrap"><i class="fas fa-ban"></i> لیست
-            سیاه</button>
+            class="bg-red-100 text-red-600 px-3 py-1 rounded text-xs whitespace-nowrap">
+            <i class="fas fa-ban"></i> لیست سیاه
+          </button>
         </div>
 
         <!-- Search -->
@@ -1354,14 +1606,20 @@ cat > public/index.html << 'EOF'
             <h3 class="text-xs font-bold text-gray-400 mb-2 px-2 flex justify-between items-center">
               کانال‌ها
               <button v-if="canCreateChannel" @click="toggleCreateChannel"
-                class="text-brand hover:text-brand-dark text-xs bg-brand/10 w-5 h-5 rounded-full flex items-center justify-center"><i
-                  class="fas fa-plus"></i></button>
+                class="text-brand hover:text-brand-dark text-xs bg-brand/10 w-5 h-5 rounded-full flex items-center justify-center">
+                <i class="fas fa-plus"></i>
+              </button>
             </h3>
 
             <div v-if="showCreateChannelInput" class="mb-2 px-2 flex gap-1 animate-fade-in">
               <input v-model="newChannelName" class="w-full text-xs p-1 border rounded" placeholder="نام کانال...">
               <button @click="createChannel" class="bg-green-500 text-white px-2 rounded text-xs"><i
                   class="fas fa-check"></i></button>
+            </div>
+
+            <div v-if="channels.length === 0" class="px-2 py-3 text-xs text-gray-400 leading-relaxed">
+              هیچ کانالی برای شما فعال نیست.
+              <div class="mt-1">ادمین باید دسترسی کانال‌ها را به شما بدهد.</div>
             </div>
 
             <ul class="space-y-1">
@@ -1420,6 +1678,7 @@ cat > public/index.html << 'EOF'
 
       <!-- Chat Area -->
       <div class="flex-1 flex flex-col relative h-full min-w-0" style="background: var(--bg-chat);">
+
         <!-- Wallpaper -->
         <div class="absolute inset-0 opacity-5 pointer-events-none"
           style="background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAIklEQVQIW2NkQAKrVq36zwjjgzhhYWGMYAEYB8RmROaABADeOQ8CXl/xfgAAAABJRU5ErkJggg==')">
@@ -1435,7 +1694,8 @@ cat > public/index.html << 'EOF'
 
           <div class="flex-1 min-w-0">
             <h2 class="font-extrabold text-gray-900 flex items-center gap-2 truncate">
-              <span v-if="isPrivateChat" class="text-brand"><i class="fas fa-user-lock"></i></span>
+              <span v-if="isSavedView" class="text-brand"><i class="fas fa-bookmark"></i></span>
+              <span v-else-if="isPrivateChat" class="text-brand"><i class="fas fa-user-lock"></i></span>
               <span v-else class="text-gray-500"><i class="fas fa-hashtag"></i></span>
               <span class="truncate">{{ displayChannelName }}</span>
             </h2>
@@ -1472,70 +1732,132 @@ cat > public/index.html << 'EOF'
           </div>
         </div>
 
+        <!-- Access Denied Banner -->
+        <div v-if="accessDeniedBanner"
+          class="bg-red-50 border-b border-red-100 text-red-700 text-xs p-2 px-4 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <i class="fas fa-lock"></i>
+            <span>{{ accessDeniedBanner }}</span>
+          </div>
+          <button class="text-red-700/70 hover:text-red-700" @click="accessDeniedBanner = ''">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+
         <!-- Messages -->
         <div class="flex-1 overflow-y-auto p-4 space-y-2 min-h-0" id="messages-container" ref="msgContainer">
-          <div v-for="msg in messages" :key="msg.id"
-            :class="['flex w-full', msg.sender === user.username ? 'justify-end' : 'justify-start']"
-            :id="'msg-row-' + msg.id">
 
-            <div @touchstart="touchStart($event, msg)" @touchmove="touchMove($event)" @touchend="touchEnd($event)"
-              @contextmenu.prevent="showContext($event, msg)" :style="getSwipeStyle(msg.id)"
-              class="msg-bubble transition-transform duration-75 ease-out select-none" :id="'msg-' + msg.id">
+          <!-- Saved view list -->
+          <div v-if="isSavedView">
+            <div v-if="savedMessages.length === 0" class="text-center text-gray-400 py-10">
+              هیچ پیامی ذخیره نشده است.
+              <div class="text-xs mt-2">روی پیام‌ها راست‌کلیک کنید و گزینه «ذخیره پیام» را بزنید.</div>
+            </div>
 
-              <div
-                class="absolute right-[-40px] top-1/2 transform -translate-y-1/2 text-brand text-lg opacity-0 transition-opacity"
-                :class="{'opacity-100': swipeId === msg.id && swipeOffset < -40}">
-                <i class="fas fa-reply"></i>
-              </div>
-
-              <div
-                :class="['rounded-2xl px-4 py-2 shadow-sm text-sm relative border', 
-                                          msg.sender === user.username ? 'bg-brand-light border-brand/20 rounded-tr-none' : 'bg-white border-gray-100 rounded-tl-none']">
-
-                <div v-if="msg.replyTo" @click="scrollToMessage(msg.replyTo.id)"
-                  class="mb-2 p-2 rounded bg-black/5 border-r-4 border-brand cursor-pointer text-xs">
-                  <div class="font-bold text-brand-dark mb-1">{{ msg.replyTo.sender }}</div>
-                  <div class="truncate opacity-70">{{ msg.replyTo.text || 'Media' }}</div>
-                </div>
-
-                <div v-if="msg.sender !== user.username"
-                  class="font-bold text-xs mb-1 text-brand-dark flex items-center gap-1">
-                  {{ msg.sender }}
-                  <i v-if="msg.role === 'admin'" class="fas fa-crown text-yellow-500 text-[10px]"></i>
-                  <i v-else-if="msg.role === 'vip'" class="fas fa-gem text-blue-500 text-[10px]"></i>
-                </div>
-
-                <div class="break-words leading-relaxed" v-if="msg.type === 'text'">{{ msg.text }}</div>
-                <img v-if="msg.type === 'image'" :src="msg.content"
-                  class="max-w-full rounded-lg mt-1 cursor-pointer hover:opacity-90 transition"
-                  @click="viewImage(msg.content)">
-                <video v-if="msg.type === 'video'" :src="msg.content" controls
-                  class="max-w-full rounded-lg mt-1"></video>
-                <audio v-if="msg.type === 'audio'" :src="msg.content" controls
-                  class="mt-1 w-full min-w-[200px]"></audio>
-                <div v-if="msg.type === 'file'" class="mt-1 bg-black/5 p-3 rounded flex items-center gap-3">
-                  <div class="w-10 h-10 bg-brand/20 rounded flex items-center justify-center text-brand text-xl">
-                    <i class="fas fa-file-alt"></i>
+            <div v-for="s in savedMessages" :key="s.id" class="panel-soft p-3 mb-2">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="text-xs text-gray-500">
+                    از <span class="font-bold text-gray-700">{{ s.from }}</span>
+                    <span class="opacity-60">•</span>
+                    <span class="font-medium">کانال: {{ s.channel }}</span>
                   </div>
-                  <div class="flex-1 overflow-hidden">
-                    <div class="truncate font-bold text-xs">{{ msg.fileName || 'File' }}</div>
-                    <a :href="msg.content" target="_blank" class="text-[10px] text-blue-500 hover:underline">دانلود
-                      فایل</a>
+
+                  <div class="mt-2 text-sm text-gray-800 break-words" v-if="s.type === 'text'">{{ s.text }}</div>
+
+                  <img v-if="s.type === 'image'" :src="s.content" class="max-w-full rounded-lg mt-2 cursor-pointer"
+                    @click="viewImage(s.content)">
+
+                  <video v-if="s.type === 'video'" :src="s.content" controls class="max-w-full rounded-lg mt-2"></video>
+
+                  <audio v-if="s.type === 'audio'" :src="s.content" controls class="mt-2 w-full"></audio>
+
+                  <div v-if="s.type === 'file'" class="mt-2 bg-black/5 p-3 rounded flex items-center gap-3">
+                    <div class="w-10 h-10 bg-brand/20 rounded flex items-center justify-center text-brand text-xl">
+                      <i class="fas fa-file-alt"></i>
+                    </div>
+                    <div class="flex-1 overflow-hidden">
+                      <div class="truncate font-bold text-xs">{{ s.fileName || 'File' }}</div>
+                      <a :href="s.content" target="_blank" class="text-[10px] text-blue-500 hover:underline">دانلود فایل</a>
+                    </div>
+                  </div>
+
+                  <div class="mt-2 text-[10px] text-gray-400">
+                    ذخیره شده در: {{ formatTime(s.savedAt) }}
                   </div>
                 </div>
 
-                <div
-                  :class="['text-[9px] mt-1 text-left', msg.sender === user.username ? 'text-brand-dark/50' : 'text-gray-400']">
-                  {{ msg.timestamp }}
-                  <i v-if="msg.sender === user.username" class="fas fa-check-double ml-1 text-blue-400"></i>
-                </div>
+                <button class="text-red-500 hover:text-red-700 text-xs" @click="unsave(s.id)">
+                  <i class="fas fa-trash"></i>
+                  حذف
+                </button>
               </div>
             </div>
           </div>
+
+          <!-- Normal chat view -->
+          <template v-else>
+            <div v-for="msg in messages" :key="msg.id"
+              :class="['flex w-full', msg.sender === user.username ? 'justify-end' : 'justify-start']"
+              :id="'msg-row-' + msg.id">
+
+              <div @touchstart="touchStart($event, msg)" @touchmove="touchMove($event)" @touchend="touchEnd($event)"
+                @contextmenu.prevent="showContext($event, msg)" :style="getSwipeStyle(msg.id)"
+                class="msg-bubble transition-transform duration-75 ease-out select-none" :id="'msg-' + msg.id">
+
+                <div
+                  class="absolute right-[-40px] top-1/2 transform -translate-y-1/2 text-brand text-lg opacity-0 transition-opacity"
+                  :class="{'opacity-100': swipeId === msg.id && swipeOffset < -40}">
+                  <i class="fas fa-reply"></i>
+                </div>
+
+                <div
+                  :class="['rounded-2xl px-4 py-2 shadow-sm text-sm relative border', 
+                                          msg.sender === user.username ? 'bg-brand-light border-brand/20 rounded-tr-none' : 'bg-white border-gray-100 rounded-tl-none']">
+
+                  <div v-if="msg.replyTo" @click="scrollToMessage(msg.replyTo.id)"
+                    class="mb-2 p-2 rounded bg-black/5 border-r-4 border-brand cursor-pointer text-xs">
+                    <div class="font-bold text-brand-dark mb-1">{{ msg.replyTo.sender }}</div>
+                    <div class="truncate opacity-70">{{ msg.replyTo.text || 'Media' }}</div>
+                  </div>
+
+                  <div v-if="msg.sender !== user.username"
+                    class="font-bold text-xs mb-1 text-brand-dark flex items-center gap-1">
+                    {{ msg.sender }}
+                    <i v-if="msg.role === 'admin'" class="fas fa-crown text-yellow-500 text-[10px]"></i>
+                    <i v-else-if="msg.role === 'vip'" class="fas fa-gem text-blue-500 text-[10px]"></i>
+                  </div>
+
+                  <div class="break-words leading-relaxed" v-if="msg.type === 'text'">{{ msg.text }}</div>
+                  <img v-if="msg.type === 'image'" :src="msg.content"
+                    class="max-w-full rounded-lg mt-1 cursor-pointer hover:opacity-90 transition"
+                    @click="viewImage(msg.content)">
+                  <video v-if="msg.type === 'video'" :src="msg.content" controls class="max-w-full rounded-lg mt-1"></video>
+                  <audio v-if="msg.type === 'audio'" :src="msg.content" controls class="mt-1 w-full min-w-[200px]"></audio>
+
+                  <div v-if="msg.type === 'file'" class="mt-1 bg-black/5 p-3 rounded flex items-center gap-3">
+                    <div class="w-10 h-10 bg-brand/20 rounded flex items-center justify-center text-brand text-xl">
+                      <i class="fas fa-file-alt"></i>
+                    </div>
+                    <div class="flex-1 overflow-hidden">
+                      <div class="truncate font-bold text-xs">{{ msg.fileName || 'File' }}</div>
+                      <a :href="msg.content" target="_blank" class="text-[10px] text-blue-500 hover:underline">دانلود فایل</a>
+                    </div>
+                  </div>
+
+                  <div
+                    :class="['text-[9px] mt-1 text-left', msg.sender === user.username ? 'text-brand-dark/50' : 'text-gray-400']">
+                    {{ msg.timestamp }}
+                    <i v-if="msg.sender === user.username" class="fas fa-check-double ml-1 text-blue-400"></i>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
         </div>
 
         <!-- Reply Input -->
-        <div v-if="replyingTo"
+        <div v-if="replyingTo && !isSavedView"
           class="bg-gray-50 border-t p-2 flex justify-between items-center border-b border-gray-200 shrink-0">
           <div class="flex-1 text-sm border-r-4 border-brand pr-3">
             <div class="font-bold text-brand text-xs">پاسخ به {{ replyingTo.sender }}</div>
@@ -1546,7 +1868,7 @@ cat > public/index.html << 'EOF'
         </div>
 
         <!-- Input Area -->
-        <div
+        <div v-if="!isSavedView"
           class="p-2 safe-pb bg-white/90 backdrop-blur-md border-t border-black/5 flex items-end gap-2 z-20 shrink-0">
           <div class="flex pb-2 gap-1">
             <button class="w-10 h-10 rounded-full hover:bg-black/5 text-gray-600 text-lg transition tap"
@@ -1579,36 +1901,53 @@ cat > public/index.html << 'EOF'
         <!-- Context Menu -->
         <div v-if="contextMenu.visible" :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }"
           class="context-menu" @click.stop>
+
           <template v-if="contextMenu.type === 'message'">
-            <div @click="setReply(contextMenu.target); contextMenu.visible = false"
+            <div @click="saveThisMessage(contextMenu.target); contextMenu.visible = false"
               class="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm flex items-center gap-2">
+              <i class="fas fa-bookmark text-gray-400 w-4"></i> ذخیره پیام
+            </div>
+
+            <div @click="setReply(contextMenu.target); contextMenu.visible = false"
+              class="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm flex items-center gap-2 border-t">
               <i class="fas fa-reply text-gray-400 w-4"></i> پاسخ
             </div>
+
             <div v-if="user.role === 'admin'" @click="deleteMessage(contextMenu.target.id); contextMenu.visible = false"
               class="px-3 py-2 hover:bg-red-50 text-red-600 cursor-pointer text-sm flex items-center gap-2 border-t">
               <i class="fas fa-trash w-4"></i> حذف پیام
             </div>
+
             <div v-if="canBan && contextMenu.target.sender !== user.username"
               @click="banUser(contextMenu.target.sender); contextMenu.visible = false"
               class="px-3 py-2 hover:bg-red-50 text-red-600 cursor-pointer text-sm flex items-center gap-2 border-t">
               <i class="fas fa-ban w-4"></i> بن کردن کاربر
             </div>
           </template>
+
           <template v-if="contextMenu.type === 'user'">
             <div @click="startPrivateChat(contextMenu.target); contextMenu.visible = false"
               class="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm flex items-center gap-2">
               <i class="fas fa-comment text-gray-400 w-4"></i> پیام خصوصی
             </div>
+
             <template v-if="user.role === 'admin' && contextMenu.target !== user.username">
+              <div @click="openAccessModal(contextMenu.target); contextMenu.visible = false"
+                class="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm flex items-center gap-2 border-t">
+                <i class="fas fa-key text-brand w-4"></i> مدیریت دسترسی کانال‌ها
+              </div>
+
               <div @click="setRole(contextMenu.target, 'vip'); contextMenu.visible = false"
-                class="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm flex items-center gap-2">
+                class="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm flex items-center gap-2 border-t">
                 <i class="fas fa-gem text-blue-500 w-4"></i> تبدیل به ویژه
               </div>
+
               <div @click="setRole(contextMenu.target, 'user'); contextMenu.visible = false"
-                class="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm flex items-center gap-2">
+                class="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm flex items-center gap-2 border-t">
                 <i class="fas fa-user text-gray-400 w-4"></i> تبدیل به عادی
               </div>
             </template>
+
             <div v-if="canBan && contextMenu.target !== user.username"
               @click="banUser(contextMenu.target); contextMenu.visible = false"
               class="px-3 py-2 hover:bg-red-50 text-red-600 cursor-pointer text-sm flex items-center gap-2 border-t">
@@ -1633,10 +1972,20 @@ cat > public/index.html << 'EOF'
             <label class="text-sm font-bold text-gray-700">مخفی کردن لیست کاربران</label>
             <input type="checkbox" v-model="adminSettings.hideUserList" class="w-5 h-5 accent-brand">
           </div>
-          <p class="text-xs text-gray-500 text-justify leading-relaxed">
-            با فعال‌سازی این گزینه، کاربران عادی قادر به مشاهده لیست افراد آنلاین نخواهند بود و فقط خودشان و ادمین‌ها را
-            می‌بینند.
-          </p>
+
+          <div class="border-t pt-4">
+            <div class="flex items-center justify-between">
+              <label class="text-sm font-bold text-gray-700">حالت دسترسی کانال‌ها</label>
+              <select v-model="adminSettings.accessMode" class="border rounded-lg px-2 py-1 text-sm bg-white">
+                <option value="restricted">Restricted (فقط با اجازه ادمین)</option>
+                <option value="open">Open (همه کاربران)</option>
+              </select>
+            </div>
+            <p class="text-xs text-gray-500 text-justify leading-relaxed mt-2">
+              در حالت Restricted، کاربر فقط کانال‌هایی که ادمین برای او فعال کرده را می‌بیند و می‌تواند چت کند.
+            </p>
+          </div>
+
           <button @click="saveAdminSettings"
             class="w-full bg-brand text-white py-2 rounded-lg text-sm font-bold shadow hover:bg-brand-dark transition">
             ذخیره تنظیمات
@@ -1668,6 +2017,115 @@ cat > public/index.html << 'EOF'
       </div>
     </div>
 
+    <!-- Saved Messages Modal (optional quick open) -->
+    <div v-if="showSavedModal"
+      class="fixed inset-0 bg-white/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div
+        class="bg-white rounded-xl shadow-xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[85vh] border border-black/5">
+        <div class="p-4 border-b flex justify-between items-center bg-gray-50">
+          <h3 class="font-bold text-gray-700"><i class="fas fa-bookmark text-brand"></i> پیام‌های ذخیره‌شده</h3>
+          <button @click="showSavedModal = false" class="text-gray-400 hover:text-gray-600"><i
+              class="fas fa-times"></i></button>
+        </div>
+        <div class="overflow-y-auto p-4 flex-1">
+          <div class="flex items-center justify-between mb-3">
+            <button class="text-xs bg-brand/10 text-brand px-3 py-1 rounded" @click="openSavedViewFromModal">
+              باز کردن در صفحه اصلی
+            </button>
+            <button class="text-xs bg-gray-100 text-gray-600 px-3 py-1 rounded" @click="refreshSaved">
+              بروزرسانی
+            </button>
+          </div>
+
+          <div v-if="savedMessages.length === 0" class="text-center text-gray-400 py-6">
+            هیچ پیامی ذخیره نشده است.
+          </div>
+
+          <div v-for="s in savedMessages" :key="s.id" class="border rounded-lg p-3 mb-2">
+            <div class="text-xs text-gray-500">
+              از <span class="font-bold text-gray-700">{{ s.from }}</span>
+              <span class="opacity-60">•</span>
+              <span class="font-medium">کانال: {{ s.channel }}</span>
+            </div>
+            <div class="mt-2 text-sm text-gray-800 break-words" v-if="s.type === 'text'">{{ s.text }}</div>
+            <img v-if="s.type === 'image'" :src="s.content" class="max-w-full rounded-lg mt-2 cursor-pointer"
+              @click="viewImage(s.content)">
+            <video v-if="s.type === 'video'" :src="s.content" controls class="max-w-full rounded-lg mt-2"></video>
+            <audio v-if="s.type === 'audio'" :src="s.content" controls class="mt-2 w-full"></audio>
+
+            <div v-if="s.type === 'file'" class="mt-2 bg-black/5 p-3 rounded flex items-center gap-3">
+              <div class="w-10 h-10 bg-brand/20 rounded flex items-center justify-center text-brand text-xl">
+                <i class="fas fa-file-alt"></i>
+              </div>
+              <div class="flex-1 overflow-hidden">
+                <div class="truncate font-bold text-xs">{{ s.fileName || 'File' }}</div>
+                <a :href="s.content" target="_blank" class="text-[10px] text-blue-500 hover:underline">دانلود فایل</a>
+              </div>
+            </div>
+
+            <div class="mt-2 flex items-center justify-between">
+              <div class="text-[10px] text-gray-400">ذخیره شده: {{ formatTime(s.savedAt) }}</div>
+              <button class="text-xs text-red-500 hover:text-red-700" @click="unsave(s.id)">
+                <i class="fas fa-trash"></i> حذف
+              </button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- Admin Access Modal -->
+    <div v-if="showAccessModal"
+      class="fixed inset-0 bg-white/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col max-h-[85vh] border border-black/5">
+        <div class="p-4 border-b flex justify-between items-center bg-gray-50">
+          <h3 class="font-bold text-gray-700">
+            <i class="fas fa-key text-brand"></i>
+            مدیریت دسترسی کانال‌ها: {{ accessModalUser }}
+          </h3>
+          <button @click="showAccessModal = false" class="text-gray-400 hover:text-gray-600">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+
+        <div class="p-4 overflow-y-auto flex-1">
+          <div class="text-xs text-gray-500 mb-3 leading-relaxed">
+            با فعال/غیرفعال کردن هر کانال، دسترسی کاربر به مشاهده و چت در آن کانال کنترل می‌شود.
+          </div>
+
+          <div v-if="accessChannels.length === 0" class="text-center text-gray-400 py-6">
+            هیچ کانالی وجود ندارد.
+          </div>
+
+          <div class="space-y-2">
+            <div v-for="ch in accessChannels" :key="ch" class="flex items-center justify-between border rounded-lg px-3 py-2">
+              <div class="flex items-center gap-2">
+                <i class="fas fa-hashtag text-xs opacity-60"></i>
+                <span class="font-bold text-sm text-gray-700">{{ ch }}</span>
+              </div>
+
+              <label class="inline-flex items-center gap-2 text-xs text-gray-600">
+                <input type="checkbox" class="w-5 h-5 accent-brand"
+                  :checked="!!accessMap[ch]"
+                  @change="toggleUserAccess(ch, $event.target.checked)">
+                دسترسی
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="p-4 border-t bg-gray-50 flex items-center justify-between">
+          <button class="text-xs bg-gray-200 text-gray-700 px-3 py-2 rounded" @click="refreshAccessModal">
+            بروزرسانی
+          </button>
+          <button class="text-xs bg-brand text-white px-3 py-2 rounded shadow hover:bg-brand-dark" @click="showAccessModal = false">
+            بستن
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Lightbox -->
     <div v-if="lightboxImage" @click="lightboxImage = null"
       class="fixed inset-0 bg-white/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
@@ -1677,10 +2135,9 @@ cat > public/index.html << 'EOF'
   </div>
 
   <script>
-    const { createApp, ref, onMounted, nextTick, computed, watch } = Vue;
+    const { createApp, ref, onMounted, nextTick, computed } = Vue;
     const socket = io();
 
-    // Short beep sound base64
     const notifyAudio = new Audio('data:audio/mp3;base64,//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq');
 
     createApp({
@@ -1691,16 +2148,17 @@ cat > public/index.html << 'EOF'
         const error = ref('');
         const appName = ref('__APP_NAME_PLACEHOLDER__');
 
-        const channels = ref(['General']);
-        const currentChannel = ref('General');
+        const channels = ref([]);
+        const currentChannel = ref('');
         const isPrivateChat = ref(false);
-        const displayChannelName = ref('General');
+        const isSavedView = ref(false);
+        const displayChannelName = ref('');
         const messages = ref([]);
         const onlineUsers = ref([]);
         const searchResults = ref([]);
         const searchQuery = ref('');
         const bannedUsers = ref([]);
-        const appSettings = ref({ maxFileSizeMB: 50 });
+        const appSettings = ref({ maxFileSizeMB: 50, accessMode: 'restricted' });
         const uploadToken = ref('');
         const unreadCounts = ref({});
 
@@ -1711,7 +2169,8 @@ cat > public/index.html << 'EOF'
         const lightboxImage = ref(null);
         const showBanModal = ref(false);
         const showAdminSettings = ref(false);
-        const adminSettings = ref({ hideUserList: false });
+
+        const adminSettings = ref({ hideUserList: false, accessMode: 'restricted' });
 
         const replyingTo = ref(null);
         const contextMenu = ref({ visible: false, x: 0, y: 0, target: null, type: null });
@@ -1719,6 +2178,7 @@ cat > public/index.html << 'EOF'
         const swipeId = ref(null);
         const swipeStartX = ref(0);
         const swipeOffset = ref(0);
+
         const isRecording = ref(false);
         const isUploading = ref(false);
         const uploadProgress = ref(0);
@@ -1727,13 +2187,20 @@ cat > public/index.html << 'EOF'
         const isAuthBusy = ref(false);
         const showScrollDown = ref(false);
 
-        const canSend = computed(() => {
-          return !!messageText.value.trim() && isConnected.value;
-        });
+        // ✅ NEW: saved messages
+        const savedMessages = ref([]);
+        const showSavedModal = ref(false);
 
-        let mediaRecorder = null;
-        let audioChunks = [];
-        const fileInput = ref(null);
+        // ✅ NEW: access UI
+        const showAccessModal = ref(false);
+        const accessModalUser = ref('');
+        const accessChannels = ref([]);
+        const accessMap = ref({});
+        const accessDeniedBanner = ref('');
+
+        const canSend = computed(() => {
+          return !!messageText.value.trim() && isConnected.value && !isSavedView.value;
+        });
 
         const sortedUsers = computed(() => {
           return [...onlineUsers.value].sort((a, b) => {
@@ -1748,9 +2215,9 @@ cat > public/index.html << 'EOF'
         onMounted(() => {
           const storedUser = localStorage.getItem('chat_user_name');
           if (storedUser) loginForm.value.username = storedUser;
+
           document.addEventListener('click', () => { contextMenu.value.visible = false; });
 
-          // Request Notification Permission on load if supported
           if ('Notification' in window && Notification.permission !== 'granted' && Notification.permission !== 'denied') {
             Notification.requestPermission();
           }
@@ -1764,29 +2231,17 @@ cat > public/index.html << 'EOF'
           }, { passive: true });
         });
 
-        // --- SMART SCROLL ---
         const scrollToBottom = (force = false) => {
           nextTick(() => {
             const c = document.getElementById('messages-container');
-            if (c) c.scrollTop = c.scrollHeight;
+            if (!c) return;
+            if (force) { c.scrollTop = c.scrollHeight; return; }
+            c.scrollTop = c.scrollHeight;
           });
         };
 
-        const checkAndScroll = (sender) => {
-          const c = document.getElementById('messages-container');
-          if (!c) return;
-          // Allow 150px threshold for being "at bottom"
-          const isNearBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 150;
-
-          // Scroll if user is at bottom OR if user sent the message themselves
-          if (force || isNearBottom || sender === user.value.username) {
-            scrollToBottom();
-          }
-        };
-
-        // --- Notifications ---
         const playSound = () => {
-          try { notifyAudio.currentTime = 0; notifyAudio.play().catch(e => { }); } catch (e) { }
+          try { notifyAudio.currentTime = 0; notifyAudio.play().catch(() => { }); } catch (e) { }
         };
 
         const notify = (title, body) => {
@@ -1796,7 +2251,16 @@ cat > public/index.html << 'EOF'
           }
         };
 
-        // --- AUTH & SETUP ---
+        const formatTime = (ts) => {
+          try {
+            const d = new Date(Number(ts));
+            return d.toLocaleString('fa-IR');
+          } catch {
+            return '';
+          }
+        };
+
+        // --- AUTH ---
         const login = () => {
           if (!loginForm.value.username || !loginForm.value.password) {
             error.value = 'نام کاربری و رمز عبور الزامی است';
@@ -1807,18 +2271,30 @@ cat > public/index.html << 'EOF'
           socket.emit('login', loginForm.value);
           if ('Notification' in window) Notification.requestPermission();
         };
+
         const logout = () => {
           localStorage.removeItem('chat_user_name');
           window.location.reload();
         };
 
-        const joinChannel = (ch, isPv) => {
+        // --- Channels / Views ---
+        const setChatView = (name, pv = false) => {
+          isSavedView.value = false;
+          isPrivateChat.value = pv;
+          currentChannel.value = name;
+          displayChannelName.value = pv ? displayChannelName.value : name;
+        };
+
+        const joinChannel = (ch) => {
+          if (!ch) return;
+          isSavedView.value = false;
           socket.emit('join_channel', ch);
           showSidebar.value = false;
-          unreadCounts.value[ch] = 0; // Reset unread
+          unreadCounts.value[ch] = 0;
         };
 
         const startPrivateChat = (targetUsername) => {
+          isSavedView.value = false;
           socket.emit('join_private', targetUsername);
           displayChannelName.value = targetUsername;
           isPrivateChat.value = true;
@@ -1828,13 +2304,38 @@ cat > public/index.html << 'EOF'
           unreadCounts.value[targetUsername] = 0;
         };
 
+        const openSavedViewFromModal = () => {
+          showSavedModal.value = false;
+          openSavedView();
+        };
+
+        const openSavedView = () => {
+          isSavedView.value = true;
+          isPrivateChat.value = false;
+          currentChannel.value = '__SAVED__';
+          displayChannelName.value = 'پیام‌های ذخیره‌شده';
+          messages.value = [];
+          showSidebar.value = false;
+          refreshSaved();
+        };
+
+        const openSavedModal = () => {
+          showSavedModal.value = true;
+          refreshSaved();
+        };
+
+        const refreshSaved = () => {
+          socket.emit('get_saved');
+        };
+
+        // --- Messaging ---
         const sendMessage = () => {
           if (!canSend.value) return;
           socket.emit('send_message', {
             text: messageText.value,
             type: 'text',
             channel: currentChannel.value,
-            conversationId: currentChannel.value, // ✅ در این نسخه: currentChannel را به عنوان conversationId استفاده می‌کنیم
+            conversationId: currentChannel.value,
             replyTo: replyingTo.value
           });
           messageText.value = '';
@@ -1844,22 +2345,44 @@ cat > public/index.html << 'EOF'
 
         const handleComposerKeydown = (e) => {
           if (e.key !== 'Enter') return;
-
-          if (e.shiftKey) return; // newline
+          if (e.shiftKey) return;
           e.preventDefault();
-
           if (!canSend.value) return;
           sendMessage();
         };
 
+        // --- Save message ---
+        const saveThisMessage = (msg) => {
+          if (!msg) return;
+          socket.emit('save_message', {
+            originalId: msg.id,
+            from: msg.sender,
+            channel: msg.channel || msg.conversationId,
+            type: msg.type,
+            text: msg.text,
+            content: msg.content,
+            fileName: msg.fileName,
+            originalAt: msg.timestamp || null
+          });
+        };
+
+        const unsave = (id) => {
+          if (!id) return;
+          socket.emit('unsave_message', id);
+        };
+
         // --- UPLOAD LOGIC ---
+        let mediaRecorder = null;
+        let audioChunks = [];
+        const fileInput = ref(null);
+
         const handleFileUpload = (e) => {
           const file = e.target.files[0];
           if (!file) return;
 
           if (file.size > appSettings.value.maxFileSizeMB * 1024 * 1024) {
             alert('حجم فایل بیشتر از حد مجاز است (' + appSettings.value.maxFileSizeMB + 'MB)');
-            e.target.value = ''; // Reset
+            e.target.value = '';
             return;
           }
 
@@ -1888,9 +2411,7 @@ cat > public/index.html << 'EOF'
                 else if (res.mimetype.startsWith('video/')) type = 'video';
                 else if (res.mimetype.startsWith('audio/')) type = 'audio';
 
-                const securedUrl = uploadToken.value
-                  ? (res.url + '?t=' + encodeURIComponent(uploadToken.value))
-                  : res.url;
+                const securedUrl = uploadToken.value ? (res.url + '?t=' + encodeURIComponent(uploadToken.value)) : res.url;
 
                 socket.emit('send_message', {
                   text: '',
@@ -1898,7 +2419,7 @@ cat > public/index.html << 'EOF'
                   content: securedUrl,
                   fileName: res.filename,
                   channel: currentChannel.value,
-                  conversationId: currentChannel.value, // ✅ هم‌راستا با sendMessage
+                  conversationId: currentChannel.value,
                   replyTo: replyingTo.value
                 });
 
@@ -1921,10 +2442,11 @@ cat > public/index.html << 'EOF'
           xhr.send(formData);
         };
 
-        // Admin Actions
+        // --- Admin Actions ---
         const deleteMessage = (msgId) => {
           if (confirm('آیا مطمئن هستید؟')) socket.emit('delete_message', msgId);
         };
+
         const createChannel = () => {
           if (newChannelName.value) {
             socket.emit('create_channel', newChannelName.value);
@@ -1932,21 +2454,46 @@ cat > public/index.html << 'EOF'
             showCreateChannelInput.value = false;
           }
         };
+
         const deleteChannel = (ch) => {
           if (confirm('حذف کانال؟')) socket.emit('delete_channel', ch);
         };
+
         const banUser = (target) => {
           if (confirm('بن کردن کاربر ' + target + ' و حذف پیام‌ها؟')) socket.emit('ban_user', target);
         };
+
         const unbanUser = (target) => socket.emit('unban_user', target);
+
         const setRole = (target, role) => socket.emit('set_role', { targetUsername: target, role });
+
         const openBanList = () => { socket.emit('get_banned_users'); showBanModal.value = true; };
+
         const saveAdminSettings = () => {
           socket.emit('update_admin_settings', adminSettings.value);
           showAdminSettings.value = false;
         };
 
-        // Helpers
+        // ✅ Access Modal
+        const openAccessModal = (targetUsername) => {
+          accessModalUser.value = targetUsername;
+          showAccessModal.value = true;
+          accessChannels.value = [];
+          accessMap.value = {};
+          socket.emit('admin_get_user_access', targetUsername);
+        };
+
+        const refreshAccessModal = () => {
+          if (!accessModalUser.value) return;
+          socket.emit('admin_get_user_access', accessModalUser.value);
+        };
+
+        const toggleUserAccess = (channel, allow) => {
+          if (!accessModalUser.value) return;
+          socket.emit('admin_set_user_access', { targetUsername: accessModalUser.value, channel, allow });
+        };
+
+        // --- Helpers ---
         const handleUserClick = (u) => { if (u.username !== user.value.username) startPrivateChat(u.username); };
         const showContext = (e, msg) => { contextMenu.value = { visible: true, x: e.pageX, y: e.pageY, target: msg, type: 'message' }; };
         const showUserContext = (e, targetUsername) => { contextMenu.value = { visible: true, x: e.pageX, y: e.pageY, target: targetUsername, type: 'user' }; };
@@ -1958,8 +2505,8 @@ cat > public/index.html << 'EOF'
         socket.on('login_success', (data) => {
           isLoggedIn.value = true;
           user.value = { username: data.username, role: data.role };
-          channels.value = data.channels;
 
+          channels.value = Array.isArray(data.channels) ? data.channels : [];
           uploadToken.value = data.uploadToken || '';
 
           if (data.settings) {
@@ -1968,18 +2515,32 @@ cat > public/index.html << 'EOF'
               appName.value = data.settings.appName;
               document.title = data.settings.appName;
             }
-            if (typeof data.settings.hideUserList === 'boolean') {
-              adminSettings.value.hideUserList = data.settings.hideUserList;
-            }
+            if (typeof data.settings.hideUserList === 'boolean') adminSettings.value.hideUserList = data.settings.hideUserList;
+            if (typeof data.settings.accessMode === 'string') adminSettings.value.accessMode = data.settings.accessMode;
           }
+
           localStorage.setItem('chat_user_name', data.username);
           isAuthBusy.value = false;
+
+          // if no accessible channels -> show empty state
+          if (channels.value.length > 0) {
+            // will be joined via server 'channel_joined'
+          } else {
+            currentChannel.value = '';
+            displayChannelName.value = 'بدون دسترسی';
+            messages.value = [];
+          }
         });
+
         socket.on('login_error', (msg) => { error.value = msg; isAuthBusy.value = false; });
+
         socket.on('force_disconnect', (msg) => { alert(msg); window.location.reload(); });
+
         socket.on('channel_joined', (data) => {
+          isSavedView.value = false;
           currentChannel.value = data.name;
           isPrivateChat.value = data.isPrivate;
+
           if (data.isPrivate) {
             const parts = data.name.split('_pv_');
             displayChannelName.value = parts.find(u => u !== user.value.username) || 'Private';
@@ -1988,26 +2549,28 @@ cat > public/index.html << 'EOF'
           }
         });
 
+        socket.on('history', (msgs) => {
+          if (isSavedView.value) return;
+          messages.value = Array.isArray(msgs) ? msgs : [];
+          scrollToBottom(true);
+        });
+
         socket.on('receive_message', (msg) => {
-          // Check if message belongs to current channel
+          if (isSavedView.value) return;
+
           if (msg.channel === currentChannel.value) {
             const c = document.getElementById('messages-container');
             const isNearBottom = c ? (c.scrollTop + c.clientHeight >= c.scrollHeight - 150) : true;
 
             messages.value.push(msg);
 
-            if (msg.sender === user.value.username || isNearBottom) {
-              scrollToBottom();
-            }
+            if (msg.sender === user.value.username || isNearBottom) scrollToBottom();
 
-            // Notify if in channel but window blurred
             if (document.hidden && msg.sender !== user.value.username) {
               notify(`پیام جدید در ${displayChannelName.value}`, `${msg.sender}: ${msg.text || 'مدیا'}`);
             }
           } else {
-            // Handle Unreads
             if (msg.channel.includes('_pv_')) {
-              // Use split to safely find partner
               const parts = msg.channel.split('_pv_');
               const partner = parts.find(p => p !== user.value.username);
 
@@ -2016,18 +2579,11 @@ cat > public/index.html << 'EOF'
                 notify(`پیام خصوصی از ${partner}`, msg.text || 'فایل ارسال شد');
               }
             } else {
-              // Public Channel logic
               unreadCounts.value[msg.channel] = (unreadCounts.value[msg.channel] || 0) + 1;
             }
           }
         });
 
-        socket.on('history', (msgs) => {
-          messages.value = msgs;
-          scrollToBottom(true);
-        });
-
-        // Handle Deletions
         socket.on('message_deleted', (data) => {
           if (data.channel === currentChannel.value) {
             messages.value = messages.value.filter(m => m.id !== data.id);
@@ -2039,26 +2595,82 @@ cat > public/index.html << 'EOF'
         });
 
         socket.on('user_list', (list) => onlineUsers.value = list);
-        socket.on('update_channels', (list) => channels.value = list);
+        socket.on('update_channels', (list) => { /* admin-only broadcast; actual per-user list is channels_list */ });
+
+        // ✅ NEW: server sends filtered list here
+        socket.on('channels_list', (list) => {
+          channels.value = Array.isArray(list) ? list : [];
+          // if current channel revoked or deleted, move away
+          if (currentChannel.value && !isPrivateChat.value && !isSavedView.value) {
+            if (!channels.value.includes(currentChannel.value)) {
+              messages.value = [];
+              currentChannel.value = '';
+              displayChannelName.value = 'بدون دسترسی';
+            }
+          }
+        });
+
+        socket.on('channel_deleted', (ch) => {
+          if (currentChannel.value === ch) {
+            messages.value = [];
+            currentChannel.value = '';
+            displayChannelName.value = 'کانال حذف شد';
+          }
+        });
+
+        socket.on('access_denied', (data) => {
+          accessDeniedBanner.value = (data && data.message) ? data.message : 'دسترسی ندارید.';
+        });
+
+        socket.on('access_revoked', (data) => {
+          accessDeniedBanner.value = (data && data.message) ? data.message : 'دسترسی شما برداشته شد.';
+          if (currentChannel.value === (data && data.channel)) {
+            messages.value = [];
+            currentChannel.value = '';
+            displayChannelName.value = 'بدون دسترسی';
+          }
+        });
+
         socket.on('banned_list', (list) => bannedUsers.value = list);
-        socket.on('action_success', (msg) => alert(msg));
+        socket.on('action_success', (msg) => { try { alert(msg); } catch { } });
         socket.on('role_update', (newRole) => { user.value.role = newRole; alert('نقش شما تغییر کرد: ' + newRole); });
 
-        // UI Utils
+        // ✅ Saved list
+        socket.on('saved_list', (list) => {
+          savedMessages.value = Array.isArray(list) ? list : [];
+        });
+
+        // ✅ Access modal data
+        socket.on('admin_user_access', (payload) => {
+          if (!payload) return;
+          if (payload.username !== accessModalUser.value) return;
+          accessChannels.value = Array.isArray(payload.channels) ? payload.channels : [];
+          accessMap.value = (payload.map && typeof payload.map === 'object') ? payload.map : {};
+        });
+
+        // --- UI Utils ---
         const setReply = (msg) => { replyingTo.value = msg; nextTick(() => document.querySelector('textarea')?.focus()); };
         const cancelReply = () => replyingTo.value = null;
+
         const scrollToMessage = (id) => { document.getElementById('msg-' + id)?.scrollIntoView({ behavior: 'smooth', block: 'center' }); };
+
         const touchStart = (e, msg) => { swipeStartX.value = e.touches[0].clientX; swipeId.value = msg.id; swipeOffset.value = 0; };
         const touchMove = (e) => { if (!swipeId.value) return; const diff = e.touches[0].clientX - swipeStartX.value; if (diff < 0 && diff > -100) swipeOffset.value = diff; };
         const touchEnd = () => { if (swipeOffset.value < -50) { const msg = messages.value.find(m => m.id === swipeId.value); if (msg) setReply(msg); } swipeId.value = null; swipeOffset.value = 0; };
         const getSwipeStyle = (id) => (swipeId.value === id ? { transform: `translateX(${swipeOffset.value}px)` } : {});
+
         const searchUser = () => { if (searchQuery.value.length > 2) socket.emit('search_user', searchQuery.value); else searchResults.value = []; };
         const toggleCreateChannel = () => showCreateChannelInput.value = !showCreateChannelInput.value;
+
         const viewImage = (src) => lightboxImage.value = src;
+
         const autoResize = (e) => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; };
 
         const toggleRecording = async () => {
-          if (isRecording.value) { mediaRecorder.stop(); isRecording.value = false; } else {
+          if (isRecording.value) {
+            mediaRecorder.stop();
+            isRecording.value = false;
+          } else {
             try {
               const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
               mediaRecorder = new MediaRecorder(stream);
@@ -2066,20 +2678,32 @@ cat > public/index.html << 'EOF'
               mediaRecorder.ondataavailable = event => audioChunks.push(event.data);
               mediaRecorder.onstop = () => {
                 const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                const reader = new FileReader(); reader.readAsDataURL(audioBlob);
+                const reader = new FileReader();
+                reader.readAsDataURL(audioBlob);
                 reader.onloadend = () => {
-                  socket.emit('send_message', { text: '', type: 'audio', content: reader.result, channel: currentChannel.value, conversationId: currentChannel.value, replyTo: replyingTo.value });
+                  socket.emit('send_message', {
+                    text: '',
+                    type: 'audio',
+                    content: reader.result,
+                    channel: currentChannel.value,
+                    conversationId: currentChannel.value,
+                    replyTo: replyingTo.value
+                  });
                   replyingTo.value = null;
                 };
               };
-              mediaRecorder.start(); isRecording.value = true;
-            } catch (e) { alert('Microphone access denied'); }
+              mediaRecorder.start();
+              isRecording.value = true;
+            } catch (e) {
+              alert('Microphone access denied');
+            }
           }
         };
 
         return {
+          // core
           isLoggedIn, user, loginForm, error, login, logout,
-          channels, currentChannel, joinChannel, displayChannelName, isPrivateChat,
+          channels, currentChannel, joinChannel, displayChannelName, isPrivateChat, isSavedView,
           messages, messageText, sendMessage, handleFileUpload, fileInput,
           onlineUsers, sortedUsers, searchUser, searchQuery, searchResults, startPrivateChat, handleUserClick,
           showSidebar, toggleCreateChannel, showCreateChannelInput, newChannelName, createChannel, deleteChannel,
@@ -2090,7 +2714,12 @@ cat > public/index.html << 'EOF'
           canCreateChannel, canBan, banUser, unbanUser, setRole,
           showBanModal, openBanList, bannedUsers, unreadCounts, appName,
           showAdminSettings, adminSettings, saveAdminSettings, uploadToken,
-          isConnected, isAuthBusy, canSend, handleComposerKeydown, showScrollDown, scrollToBottom
+          isConnected, isAuthBusy, canSend, handleComposerKeydown, showScrollDown, scrollToBottom,
+          // saved
+          savedMessages, showSavedModal, openSavedModal, refreshSaved, openSavedView, openSavedViewFromModal, saveThisMessage, unsave, formatTime,
+          // access UI
+          showAccessModal, accessModalUser, accessChannels, accessMap, openAccessModal, toggleUserAccess, refreshAccessModal,
+          accessDeniedBanner
         };
       }
     }).mount('#app');
