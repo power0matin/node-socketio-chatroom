@@ -24,9 +24,38 @@ APP_NAME_VAL="${INPUT_APP_NAME:-$APP_NAME_DEFAULT}"
 read -r -p "Admin Username [default: admin]: " INPUT_USER
 ADMIN_USER="${INPUT_USER:-admin}"
 
-# برای حفظ رفتار تو، همچنان default می‌ذارم؛ ولی امنیت بهتر اینه که عوضش کنی.
-read -r -p "Admin Password [default: 123456]: " INPUT_PASS
-ADMIN_PASS="${INPUT_PASS:-123456}"
+# Admin Password (secure): no weak default, hidden input. If empty => generate strong random.
+prompt_password() {
+  local pass1 pass2
+  while true; do
+    read -r -s -p "Admin Password (leave empty to auto-generate): " pass1
+    echo ""
+    if [[ -z "${pass1}" ]]; then
+      # 24 chars, URL-safe-ish
+      ADMIN_PASS="$(LC_ALL=C tr -dc 'A-Za-z0-9@#%_+=-' </dev/urandom | head -c 24)"
+      echo "Generated Admin Password: ${ADMIN_PASS}"
+      echo "⚠️  Please save it now. It will NOT be shown again."
+      return 0
+    fi
+
+    if (( ${#pass1} < 10 )); then
+      echo "Password must be at least 10 characters."
+      continue
+    fi
+
+    read -r -s -p "Confirm Password: " pass2
+    echo ""
+    if [[ "${pass1}" != "${pass2}" ]]; then
+      echo "Passwords do not match. Try again."
+      continue
+    fi
+
+    ADMIN_PASS="${pass1}"
+    return 0
+  done
+}
+
+prompt_password
 
 read -r -p "Port [default: 3000]: " INPUT_PORT
 PORT="${INPUT_PORT:-3000}"
@@ -220,21 +249,30 @@ function normalizeOrigins(val) {
   return s.split(',').map(x => x.trim()).filter(Boolean);
 }
 
-function loadAndSecureConfig() {
+let lastConfigMtimeMs = 0;
+
+function loadAndSecureConfig(force = false) {
   try {
+    let stat;
+    try { stat = fs.statSync(CONFIG_FILE); } catch { stat = null; }
+
+    const mtimeMs = stat ? stat.mtimeMs : 0;
+    if (!force && mtimeMs && mtimeMs === lastConfigMtimeMs) return false; // no change
+
     let saveNeeded = false;
     const fileConfig = readJsonSafe(CONFIG_FILE, null);
 
     if (fileConfig) appConfig = { ...appConfig, ...fileConfig };
     else saveNeeded = true;
 
-    // migrate plaintext adminPass -> hash
+    // migrate plaintext adminPass -> hash (backward compat)
     if (appConfig.adminPass && !appConfig.adminPassHash) {
       appConfig.adminPassHash = bcrypt.hashSync(String(appConfig.adminPass), 12);
       delete appConfig.adminPass;
       saveNeeded = true;
     }
 
+    // ensure hash format
     if (appConfig.adminPassHash && !String(appConfig.adminPassHash).startsWith('$2')) {
       appConfig.adminPassHash = bcrypt.hashSync(String(appConfig.adminPassHash), 12);
       saveNeeded = true;
@@ -243,12 +281,25 @@ function loadAndSecureConfig() {
     appConfig.allowedOrigins = normalizeOrigins(appConfig.allowedOrigins);
 
     if (saveNeeded) atomicWriteJson(CONFIG_FILE, appConfig, 0o600);
+
+    // update mtime tracking after potential write
+    try {
+      const st2 = fs.statSync(CONFIG_FILE);
+      lastConfigMtimeMs = st2.mtimeMs;
+    } catch {
+      lastConfigMtimeMs = mtimeMs || 0;
+    }
+
+    return true; // changed
   } catch (e) {
     console.error('Error loading config:', e);
+    return false;
   }
 }
 
-loadAndSecureConfig();
+// Initial load
+loadAndSecureConfig(true);
+
 const PORT = Number(process.env.PORT || appConfig.port || 3000);
 
 // -------------------- Socket.io --------------------
@@ -346,7 +397,10 @@ function ensurePublicConversation(channelName, createdBy = 'system') {
 }
 
 function dmKeyFor(u1, u2) {
-  return ['dm', u1, u2].sort().join(':');
+  // UI expects "_pv_" in multiple places; keep consistent.
+  const a = String(u1 || '').trim();
+  const b = String(u2 || '').trim();
+  return [a, b].sort().join('_pv_');
 }
 
 function getOrCreateDMConversation(u1, u2) {
@@ -442,22 +496,47 @@ const storage = multer.diskStorage({
   }
 });
 
-let upload = multer({
-  storage,
-  limits: { fileSize: Number(appConfig.maxFileSizeMB || 50) * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => {
-    if (!allowedMimes.has(file.mimetype)) return cb(new Error('DISALLOWED_MIME'));
-    if (!safeExt(file.originalname)) return cb(new Error('DISALLOWED_EXT'));
-    cb(null, true);
-  }
-});
+// -------------------- Upload (optimized) --------------------
+let uploadSingle = null;
+let lastUploadLimitBytes = 0;
 
-// Protect downloads if enabled
+function rebuildUploadMiddleware() {
+  const limitBytes = Number(appConfig.maxFileSizeMB || 50) * 1024 * 1024;
+  if (uploadSingle && limitBytes === lastUploadLimitBytes) return;
+
+  lastUploadLimitBytes = limitBytes;
+
+  const upload = multer({
+    storage,
+    limits: { fileSize: limitBytes },
+    fileFilter: (_req, file, cb) => {
+      if (!allowedMimes.has(file.mimetype)) return cb(new Error('DISALLOWED_MIME'));
+      if (!safeExt(file.originalname)) return cb(new Error('DISALLOWED_EXT'));
+      cb(null, true);
+    }
+  });
+
+  uploadSingle = upload.single('file');
+}
+
+// initial build
+rebuildUploadMiddleware();
+
+// Periodic refresh (cheap)
+setInterval(() => {
+  const changed = loadAndSecureConfig(false);
+  if (changed) {
+    // if config changed, rebuild dependent parts (multer limits, etc.)
+    rebuildUploadMiddleware();
+  }
+}, 5000).unref();
+
+// Protect downloads if enabled (NO per-request config reload)
 app.use('/uploads', (req, res, next) => {
-  loadAndSecureConfig();
   if (!appConfig.protectUploads) return next();
 
-  const tok = String(req.query.t || req.headers['x-upload-token'] || '');
+  // Prefer header, but keep query for backward-compat
+  const tok = String(req.headers['x-upload-token'] || req.query.t || '');
   const rec = uploadTokens.get(tok);
   if (!rec || rec.exp <= Date.now()) return res.status(401).send('Unauthorized');
   next();
@@ -470,20 +549,8 @@ app.post('/upload', uploadLimiter, (req, res) => {
   const rec = uploadTokens.get(tok);
   if (!rec || rec.exp <= Date.now()) return res.status(401).json({ error: 'Unauthorized upload.' });
 
-  const fresh = readJsonSafe(CONFIG_FILE, null);
-  if (fresh && fresh.maxFileSizeMB) {
-    upload = multer({
-      storage,
-      limits: { fileSize: Number(fresh.maxFileSizeMB) * 1024 * 1024 },
-      fileFilter: (_req, file, cb) => {
-        if (!allowedMimes.has(file.mimetype)) return cb(new Error('DISALLOWED_MIME'));
-        if (!safeExt(file.originalname)) return cb(new Error('DISALLOWED_EXT'));
-        cb(null, true);
-      }
-    });
-  }
+  if (!uploadSingle) rebuildUploadMiddleware();
 
-  const uploadSingle = upload.single('file');
   uploadSingle(req, res, function (err) {
     if (err instanceof multer.MulterError) return res.status(400).json({ error: 'File too large or upload error.' });
     if (err) return res.status(400).json({ error: 'File type not allowed.' });
@@ -493,7 +560,6 @@ app.post('/upload', uploadLimiter, (req, res) => {
     res.json({ url: '/uploads/' + req.file.filename, filename: cleanOriginal, size: req.file.size, mimetype: req.file.mimetype });
   });
 });
-
 // -------------------- Online users list --------------------
 function getUniqueOnlineUsers() {
   const unique = {};
@@ -820,7 +886,7 @@ io.on('connection', (socket) => {
       if (idx !== -1) {
         messages[key].splice(idx, 1);
         found = true;
-        io.emit('message_deleted', { channel: key, id });
+        io.to(key).emit('message_deleted', { channel: key, id });
         break;
       }
     }
@@ -1651,21 +1717,6 @@ EOF
 # For the installer to be truly "single-file", paste your current full index.html content
 # in place of __PASTE_YOUR_EXISTING_INDEX_HTML_HERE__ (exactly as you have it).
 # (I didn't alter UI to avoid breaking anything.)
-
-cat > data/config.json <<EOF
-{
-  "adminUser": "$(echo "$ADMIN_USER" | sed 's/"/\\"/g')",
-  "adminPass": "$(echo "$ADMIN_PASS" | sed 's/"/\\"/g')",
-  "port": $PORT,
-  "maxFileSizeMB": 50,
-  "appName": "$(echo "$APP_NAME_VAL" | sed 's/"/\\"/g')",
-  "hideUserList": false,
-  "allowedOrigins": "$(echo "$ALLOWED_ORIGINS" | sed 's/"/\\"/g')",
-  "protectUploads": true
-}
-EOF
-chmod 600 data/config.json
-
 echo "[4/6] Applying configuration..."
 # Replace placeholders if they exist in your index.html
 sed -i "s|__APP_NAME_PLACEHOLDER__|$APP_NAME_VAL|g" public/index.html || true
@@ -1676,8 +1727,38 @@ sed -i "s|__COLOR_LIGHT__|$C_LIGHT|g" public/index.html || true
 echo "[5/6] Installing project dependencies..."
 "$NPM_BIN" install
 
+# --- After npm install: create config with adminPassHash (no plaintext) ---
+ADMIN_PASS_HASH="$(
+  ADMIN_PASS="$ADMIN_PASS" node - <<'NODE'
+const bcrypt = require('bcryptjs');
+const pass = process.env.ADMIN_PASS || '';
+if (!pass) process.exit(2);
+process.stdout.write(bcrypt.hashSync(pass, 12));
+NODE
+)"
+if [[ -z "${ADMIN_PASS_HASH}" ]]; then
+  echo "ERROR: failed to generate adminPassHash"
+  exit 1
+fi
+
+cat > data/config.json <<EOF
+{
+  "adminUser": "$(echo "$ADMIN_USER" | sed 's/"/\\"/g')",
+  "adminPassHash": "$(echo "$ADMIN_PASS_HASH" | sed 's/"/\\"/g')",
+  "port": $PORT,
+  "maxFileSizeMB": 50,
+  "appName": "$(echo "$APP_NAME_VAL" | sed 's/"/\\"/g')",
+  "hideUserList": false,
+  "allowedOrigins": "$(echo "$ALLOWED_ORIGINS" | sed 's/"/\\"/g')",
+  "protectUploads": true
+}
+EOF
+chmod 600 data/config.json
+
+# Do NOT keep plaintext password around longer than needed
+unset ADMIN_PASS
 echo "[6/6] Starting server with PM2..."
-PM2_NAME="HyperSentry"
+PM2_NAME="${APP_NAME_VAL}"
 pm2 delete "$PM2_NAME" 2>/dev/null || true
 PORT="$PORT" pm2 start server.js --name "$PM2_NAME"
 pm2 save
@@ -1688,7 +1769,7 @@ cat << 'EOF_MENU' > /tmp/node-socketio-chatroom-menu.sh
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-APP_NAME="HyperSentry"
+APP_NAME="__PM2_NAME__"
 DIR="__DIR__"
 CONFIG_FILE="$DIR/data/config.json"
 INDEX_FILE="$DIR/public/index.html"
@@ -1931,6 +2012,7 @@ EOF_MENU
 
 # Fill placeholders safely (فایل درست همونیه که ساختی)
 sed -i "s|__DIR__|$DIR|g" /tmp/node-socketio-chatroom-menu.sh
+sed -i "s|__PM2_NAME__|$PM2_NAME|g" /tmp/node-socketio-chatroom-menu.sh
 
 sudo mv /tmp/node-socketio-chatroom-menu.sh /usr/local/bin/node-socketio-chatroom
 sudo chmod +x /usr/local/bin/node-socketio-chatroom
@@ -1942,7 +2024,7 @@ echo "========================================"
 echo ""
 echo "Your Admin Credentials:"
 echo "User: $ADMIN_USER"
-echo "Pass: will be stored hashed after first server start"
+echo "Pass: stored hashed in config.json (password will not be shown again)"
 echo ""
 IP="$(curl -fsS https://api.ipify.org 2>/dev/null || curl -fsS https://ifconfig.co 2>/dev/null || echo 'YOUR_SERVER_IP')"
 echo "Access URL: http://$IP:$PORT"
