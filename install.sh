@@ -187,6 +187,7 @@ const crypto = require('crypto');
 
 const app = express();
 app.disable('x-powered-by');
+app.set('trust proxy', 1);
 const server = http.createServer(app);
 
 // -------------------- Security headers --------------------
@@ -236,6 +237,76 @@ function atomicWriteJson(file, obj, mode = 0o600) {
   try { fs.chmodSync(file, mode); } catch {}
 }
 
+// -------------------- Data-at-rest encryption (AES-256-GCM) --------------------
+function keyFromHex(hex) {
+  try {
+    const h = String(hex || '').trim();
+    if (!h) return null;
+    const buf = Buffer.from(h, 'hex');
+    return buf.length === 32 ? buf : null;
+  } catch {
+    return null;
+  }
+}
+
+function encryptPayload(key, obj) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const plaintext = Buffer.from(JSON.stringify(obj), 'utf8');
+  const enc = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return {
+    v: 1,
+    alg: 'A256GCM',
+    iv: iv.toString('base64'),
+    tag: tag.toString('base64'),
+    data: enc.toString('base64')
+  };
+}
+
+function decryptPayload(key, wrapper) {
+  const iv = Buffer.from(String(wrapper.iv || ''), 'base64');
+  const tag = Buffer.from(String(wrapper.tag || ''), 'base64');
+  const data = Buffer.from(String(wrapper.data || ''), 'base64');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  const dec = Buffer.concat([decipher.update(data), decipher.final()]);
+  return JSON.parse(dec.toString('utf8'));
+}
+
+function isEncryptedWrapper(obj) {
+  return !!(obj && typeof obj === 'object' && obj.v === 1 && obj.alg === 'A256GCM' && obj.iv && obj.tag && obj.data);
+}
+
+function readJsonSecure(file, fallback) {
+  try {
+    if (!fs.existsSync(file)) return fallback;
+    const raw = fs.readFileSync(file, 'utf8');
+    if (!raw) return fallback;
+
+    const parsed = JSON.parse(raw);
+
+    const key = keyFromHex(appConfig.dataEncKey);
+    if (key && isEncryptedWrapper(parsed)) {
+      return decryptPayload(key, parsed);
+    }
+
+    return parsed;
+  } catch {
+    return fallback;
+  }
+}
+
+function atomicWriteJsonSecure(file, obj, mode = 0o600) {
+  const key = keyFromHex(appConfig.dataEncKey);
+
+  const payload = key
+    ? encryptPayload(key, obj)
+    : obj;
+
+  atomicWriteJson(file, payload, mode);
+}
+
 // -------------------- Config --------------------
 let appConfig = {
   adminUser: 'admin',
@@ -245,7 +316,8 @@ let appConfig = {
   appName: 'node-socketio-chatroom',
   hideUserList: false,
   allowedOrigins: '*',
-  protectUploads: true
+  protectUploads: true,
+  dataEncKey: ''
 };
 
 function normalizeOrigins(val) {
@@ -353,12 +425,12 @@ setInterval(() => {
 }, 60_000).unref();
 
 // Load data
-persistentUsers = readJsonSafe(USERS_FILE, {});
-channels = readJsonSafe(CHANNELS_FILE, channels);
-messages = readJsonSafe(MESSAGES_FILE, {});
-conversations = readJsonSafe(CONVERSATIONS_FILE, {});
-memberships = readJsonSafe(MEMBERSHIPS_FILE, {});
-attachments = readJsonSafe(ATTACHMENTS_FILE, {});
+persistentUsers = readJsonSecure(USERS_FILE, {});
+channels = readJsonSecure(CHANNELS_FILE, channels);
+messages = readJsonSecure(MESSAGES_FILE, {});
+conversations = readJsonSecure(CONVERSATIONS_FILE, {});
+memberships = readJsonSecure(MEMBERSHIPS_FILE, {});
+attachments = readJsonSecure(ATTACHMENTS_FILE, {});
 
 // -------------------- Helpers --------------------
 function cleanUsername(username) {
@@ -432,12 +504,12 @@ function getOrCreateDMConversation(u1, u2) {
 
 function saveData() {
   try {
-    atomicWriteJson(USERS_FILE, persistentUsers, 0o600);
-    atomicWriteJson(CHANNELS_FILE, channels, 0o600);
-    atomicWriteJson(MESSAGES_FILE, messages, 0o600);
-    atomicWriteJson(CONVERSATIONS_FILE, conversations, 0o600);
-    atomicWriteJson(MEMBERSHIPS_FILE, memberships, 0o600);
-    atomicWriteJson(ATTACHMENTS_FILE, attachments, 0o600);
+    atomicWriteJsonSecure(USERS_FILE, persistentUsers, 0o600);
+    atomicWriteJsonSecure(CHANNELS_FILE, channels, 0o600);
+    atomicWriteJsonSecure(MESSAGES_FILE, messages, 0o600);
+    atomicWriteJsonSecure(CONVERSATIONS_FILE, conversations, 0o600);
+    atomicWriteJsonSecure(MEMBERSHIPS_FILE, memberships, 0o600);
+    atomicWriteJsonSecure(ATTACHMENTS_FILE, attachments, 0o600);
   } catch (e) {
     console.error('Error saving data', e);
   }
@@ -601,19 +673,83 @@ function getBannedUsers() {
 }
 
 // -------------------- Socket events --------------------
+const loginAttempts = new Map();
+// key => { count, first, last }
+
+function getSocketIp(socket) {
+  const xf = socket.handshake.headers['x-forwarded-for'];
+  if (xf && typeof xf === 'string') return xf.split(',')[0].trim();
+  return String(socket.handshake.address || '').trim() || 'unknown';
+}
+
+function loginKey(ip, username) {
+  return `${ip}::${String(username || '').toLowerCase()}`;
+}
+
+function isLoginLimited(ip, username) {
+  const key = loginKey(ip, username);
+  const now = Date.now();
+  const rec = loginAttempts.get(key);
+
+  const windowMs = 10 * 60 * 1000; // 10 min
+  const max = 12;                  // 12 attempts / 10 min per ip+user
+
+  if (!rec) return false;
+
+  if (now - rec.first > windowMs) {
+    loginAttempts.delete(key);
+    return false;
+  }
+
+  return rec.count >= max;
+}
+
+function recordLoginFail(ip, username) {
+  const key = loginKey(ip, username);
+  const now = Date.now();
+  const rec = loginAttempts.get(key);
+
+  if (!rec) {
+    loginAttempts.set(key, { count: 1, first: now, last: now });
+    return;
+  }
+
+  rec.count += 1;
+  rec.last = now;
+  loginAttempts.set(key, rec);
+}
+
+function clearLoginFails(ip, username) {
+  loginAttempts.delete(loginKey(ip, username));
+}
+
+// cleanup
+setInterval(() => {
+  const now = Date.now();
+  const windowMs = 10 * 60 * 1000;
+  for (const [k, v] of loginAttempts.entries()) {
+    if (!v || (now - v.first > windowMs)) loginAttempts.delete(k);
+  }
+}, 60_000).unref();
+
+// -------------------- Socket events --------------------
 io.on('connection', (socket) => {
   socket.on('login', ({ username, password }) => {
     loadAndSecureConfig();
 
+    const ip = getSocketIp(socket);
+
     const u = cleanUsername(username);
     const p = String(password || '');
-    if (!u || !p) return socket.emit('login_error', 'نام کاربری و رمز عبور الزامی است');
+    if (isLoginLimited(ip, u)) return socket.emit('login_error', 'تلاش‌های ورود زیاد است. چند دقیقه بعد دوباره امتحان کنید.');
+    if (!u || !p) { recordLoginFail(ip, u || ''); return socket.emit('login_error', 'نام کاربری و رمز عبور الزامی است'); }
 
     // Admin login
     if (u === appConfig.adminUser) {
       const ok = appConfig.adminPassHash && bcrypt.compareSync(p, appConfig.adminPassHash);
-      if (!ok) return socket.emit('login_error', 'رمز عبور ادمین اشتباه است.');
+      if (!ok) { recordLoginFail(ip, u); return socket.emit('login_error', 'رمز عبور ادمین اشتباه است.'); }
 
+      clearLoginFails(ip, u);
       users[socket.id] = { username: u, role: 'admin' };
 
       const uploadToken = crypto.randomBytes(24).toString('hex');
@@ -645,8 +781,8 @@ io.on('connection', (socket) => {
     // Normal user login/register
     const existing = persistentUsers[u];
     if (existing) {
-      if (existing.isBanned) return socket.emit('login_error', 'حساب کاربری شما مسدود شده است.');
-      if (!existing.passHash || !bcrypt.compareSync(p, existing.passHash)) return socket.emit('login_error', 'رمز عبور اشتباه است.');
+      if (existing.isBanned) { recordLoginFail(ip, u); return socket.emit('login_error', 'حساب کاربری شما مسدود شده است.'); }
+      if (!existing.passHash || !bcrypt.compareSync(p, existing.passHash)) { recordLoginFail(ip, u); return socket.emit('login_error', 'رمز عبور اشتباه است.'); }
     } else {
       persistentUsers[u] = {
         passHash: bcrypt.hashSync(p, 12),
@@ -656,6 +792,7 @@ io.on('connection', (socket) => {
       };
     }
 
+    clearLoginFails(ip, u);
     persistentUsers[u].last_seen = Date.now();
     saveData();
 
@@ -1993,6 +2130,32 @@ if [[ -z "${ADMIN_PASS_HASH}" ]]; then
   exit 1
 fi
 
+# --- Data-at-rest encryption key (AES-256-GCM) ---
+# Try OpenSSL, fallback to /dev/urandom hex
+DATA_ENC_KEY=""
+if command -v openssl >/dev/null 2>&1; then
+  DATA_ENC_KEY="$(openssl rand -hex 32)"
+else
+  DATA_ENC_KEY="$(LC_ALL=C tr -dc 'a-f0-9' </dev/urandom | head -c 64)"
+fi
+
+if [[ -z "${DATA_ENC_KEY}" || "${#DATA_ENC_KEY}" -lt 64 ]]; then
+  echo "ERROR: failed to generate dataEncKey"
+  exit 1
+fi
+
+DATA_ENC_KEY=""
+if command -v openssl >/dev/null 2>&1; then
+  DATA_ENC_KEY="$(openssl rand -hex 32)"
+else
+  DATA_ENC_KEY="$(LC_ALL=C tr -dc 'a-f0-9' </dev/urandom | head -c 64)"
+fi
+
+if [[ -z "${DATA_ENC_KEY}" || "${#DATA_ENC_KEY}" -lt 64 ]]; then
+  echo "ERROR: failed to generate dataEncKey"
+  exit 1
+fi
+
 cat > data/config.json <<EOF
 {
   "adminUser": "$(echo "$ADMIN_USER" | sed 's/"/\\"/g')",
@@ -2002,7 +2165,8 @@ cat > data/config.json <<EOF
   "appName": "$(echo "$APP_NAME_VAL" | sed 's/"/\\"/g')",
   "hideUserList": false,
   "allowedOrigins": "$(echo "$ALLOWED_ORIGINS" | sed 's/"/\\"/g')",
-  "protectUploads": true
+  "protectUploads": true,
+  "dataEncKey": "$DATA_ENC_KEY"
 }
 EOF
 chmod 600 data/config.json
