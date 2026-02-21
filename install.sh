@@ -81,20 +81,20 @@ echo "6) Teal"
 read -r -p "Enter number [1-6]: " COLOR_CHOICE
 
 case "${COLOR_CHOICE:-1}" in
-  1) # Telegram (Primary: #2AABEE / #0088cc)
-     C_DEF="#2AABEE"; C_DARK="#0088cc"; C_LIGHT="#E0F2FE" ;;
-  2) # WhatsApp (Greens: #25D366 / #128C7E)
-     C_DEF="#25D366"; C_DARK="#128C7E"; C_LIGHT="#DCFCE7" ;;
-  3) # Discord Blurple (#5865F2)
-     C_DEF="#5865F2"; C_DARK="#4752C4"; C_LIGHT="#EEF2FF" ;;
-  4) # Slack Aubergine (#4A154B)
-     C_DEF="#4A154B"; C_DARK="#3D1140"; C_LIGHT="#F3E8FF" ;;
-  5) # Twitter/X Blue (#1DA1F2)
-     C_DEF="#1DA1F2"; C_DARK="#0C8BD9"; C_LIGHT="#E0F2FE" ;;
-  6) # Calm Teal (fallback modern)
-     C_DEF="#0d9488"; C_DARK="#0f766e"; C_LIGHT="#ccfbf1" ;;
-  *) # Default = Telegram (safe)
-     C_DEF="#2AABEE"; C_DARK="#0088cc"; C_LIGHT="#E0F2FE" ;;
+  1) # Azure Blue (Modern, safe for dashboards)
+     C_DEF="#2563EB"; C_DARK="#1D4ED8"; C_LIGHT="#EFF6FF" ;;
+  2) # Iris Purple (Premium, calm)
+     C_DEF="#7C3AED"; C_DARK="#6D28D9"; C_LIGHT="#F5F3FF" ;;
+  3) # Emerald Green (Friendly, balanced)
+     C_DEF="#10B981"; C_DARK="#059669"; C_LIGHT="#ECFDF5" ;;
+  4) # Rose Red (Alerts/Admin emphasis)
+     C_DEF="#F43F5E"; C_DARK="#E11D48"; C_LIGHT="#FFF1F2" ;;
+  5) # Amber Orange (Warm, readable)
+     C_DEF="#F59E0B"; C_DARK="#D97706"; C_LIGHT="#FFFBEB" ;;
+  6) # Teal (Clean, modern)
+     C_DEF="#14B8A6"; C_DARK="#0F766E"; C_LIGHT="#F0FDFA" ;;
+  *) # Default = Azure Blue
+     C_DEF="#2563EB"; C_DARK="#1D4ED8"; C_LIGHT="#EFF6FF" ;;
 esac
 
 echo ""
@@ -952,28 +952,28 @@ cat > public/index.html << 'EOF'
         }
       }
     </script>
-    <style>
+<style>
   :root {
     /* Replaced by installer */
     --brand-color: __COLOR_DEFAULT__;
     --brand-dark: __COLOR_DARK__;
     --brand-light: __COLOR_LIGHT__;
 
-    /* 2025/2026 neutral base (light) */
-    --bg-app: #F6F7FB;
-    --bg-chat: #F1F3F7;
+    /* Light-only base (clean + cohesive) */
+    --bg-app: #F7F8FC;
+    --bg-chat: #F2F4F8;
 
-    /* Subtle glass surfaces */
-    --panel: rgba(255, 255, 255, 0.72);
-    --panel-2: rgba(255, 255, 255, 0.58);
+    /* Surfaces */
+    --panel: rgba(255, 255, 255, 0.82);
+    --panel-2: rgba(255, 255, 255, 0.66);
 
     --text: #0B1220;
-    --muted: rgba(15, 23, 42, 0.60);
+    --muted: rgba(15, 23, 42, 0.62);
 
-    --border: rgba(15, 23, 42, 0.08);
-    --border-strong: rgba(15, 23, 42, 0.12);
+    --border: rgba(15, 23, 42, 0.10);
+    --border-strong: rgba(15, 23, 42, 0.14);
 
-    /* Modern soft shadows (no heavy glow) */
+    /* Shadows (soft, modern) */
     --shadow: 0 18px 55px rgba(2, 6, 23, 0.10);
     --shadow-soft: 0 10px 28px rgba(2, 6, 23, 0.08);
 
@@ -981,17 +981,18 @@ cat > public/index.html << 'EOF'
     --radius-lg: 16px;
     --radius-md: 14px;
 
-    /* Focus ring: subtle, brand-friendly */
-    --ring: 0 0 0 4px rgba(37, 99, 235, 0.18);
+    /* Focus ring uses brand (dynamic) */
+    --ring: 0 0 0 4px color-mix(in srgb, var(--brand-color) 22%, transparent);
   }
 
   html, body { height: 100%; }
 
   body {
     font-family: 'Vazirmatn', sans-serif;
-    background: radial-gradient(1200px 600px at 75% -10%, rgba(59,130,246,0.08), transparent 60%),
-                radial-gradient(900px 500px at 10% 20%, rgba(99,102,241,0.06), transparent 55%),
-                var(--bg-app);
+    background:
+      radial-gradient(1100px 600px at 78% -10%, color-mix(in srgb, var(--brand-color) 14%, transparent), transparent 60%),
+      radial-gradient(900px 520px at 12% 18%, color-mix(in srgb, var(--brand-dark) 10%, transparent), transparent 55%),
+      linear-gradient(180deg, #FFFFFF 0%, var(--bg-app) 42%, var(--bg-app) 100%);
     color: var(--text);
     overscroll-behavior-y: none;
     height: 100vh;
@@ -1011,8 +1012,8 @@ cat > public/index.html << 'EOF'
 
   /* Scrollbars (subtle) */
   ::-webkit-scrollbar { width: 6px; height: 6px; }
-  ::-webkit-scrollbar-thumb { background: rgba(107,114,128,0.30); border-radius: 999px; }
-  ::-webkit-scrollbar-thumb:hover { background: rgba(107,114,128,0.48); }
+  ::-webkit-scrollbar-thumb { background: rgba(107,114,128,0.28); border-radius: 999px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(107,114,128,0.42); }
 
   /* Panels: glassy but restrained */
   .panel {
@@ -1043,16 +1044,17 @@ cat > public/index.html << 'EOF'
   /* Context menu: subtle glass */
   .context-menu {
     position: absolute;
-    background: rgba(255,255,255,0.82);
+    background: rgba(255,255,255,0.90);
     backdrop-filter: blur(14px);
     -webkit-backdrop-filter: blur(14px);
     border-radius: 14px;
-    box-shadow: 0 16px 44px rgba(0,0,0,0.16);
+    box-shadow: 0 16px 44px rgba(0,0,0,0.14);
     padding: 6px;
     z-index: 120;
     min-width: 160px;
     overflow: hidden;
-    border: 1px solid rgba(0,0,0,0.06);
+    border: 1px solid rgba(15,23,42,0.08);
+    color: var(--text);
   }
 
   .unread-badge {
@@ -1075,43 +1077,6 @@ cat > public/index.html << 'EOF'
   .tap:active { transform: scale(0.985); filter: brightness(0.985); }
 
   textarea::placeholder { color: rgba(107,114,128,0.78); }
-
-  /* Dark mode: modern, no over-contrast, keeps glass */
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg-app: #070B14;
-      --bg-chat: #0B1220;
-
-      --panel: rgba(17, 24, 39, 0.72);
-      --panel-2: rgba(17, 24, 39, 0.56);
-
-      --text: rgba(229,231,235,0.96);
-      --muted: rgba(229,231,235,0.62);
-
-      --border: rgba(255,255,255,0.10);
-      --border-strong: rgba(255,255,255,0.14);
-
-      --shadow: 0 22px 60px rgba(0,0,0,0.45);
-      --shadow-soft: 0 12px 30px rgba(0,0,0,0.34);
-
-      --ring: 0 0 0 4px rgba(56, 189, 248, 0.22);
-    }
-
-    body {
-      background: radial-gradient(1200px 600px at 75% -10%, rgba(56,189,248,0.10), transparent 60%),
-                  radial-gradient(900px 500px at 10% 20%, rgba(99,102,241,0.08), transparent 55%),
-                  var(--bg-app);
-    }
-
-    ::-webkit-scrollbar-thumb { background: rgba(156,163,175,0.24); }
-    ::-webkit-scrollbar-thumb:hover { background: rgba(156,163,175,0.40); }
-
-    .context-menu {
-      background: rgba(17,24,39,0.78);
-      border: 1px solid rgba(255,255,255,0.10);
-      color: var(--text);
-    }
-  }
 </style>
 </head>
 <body class="w-full overflow-hidden flex flex-col dir-rtl">
@@ -1119,40 +1084,40 @@ cat > public/index.html << 'EOF'
     <div id="app" class="h-full flex flex-col w-full">
         
         <!-- Login Screen -->
-        <div v-if="!isLoggedIn" class="fixed inset-0 bg-gray-900/90 flex items-center justify-center z-50 p-4">
-            <div class="panel w-full max-w-sm text-center overflow-hidden">
-                <div class="p-6 md:p-8">
-                    <div class="w-16 h-16 bg-brand rounded-2xl mx-auto flex items-center justify-center mb-4 text-white text-2xl shadow-lg shadow-brand/25">
-                        <i class="fas fa-comments"></i>
-                    </div>
-                    <h1 class="text-2xl font-extrabold mb-2 text-brand-dark tracking-tight">{{ appName }}</h1>
-                    <p class="text-xs text-gray-500 mb-6 leading-relaxed">برای ورود یا ثبت نام اطلاعات زیر را وارد کنید</p>
+<div v-if="!isLoggedIn" class="fixed inset-0 bg-white/75 backdrop-blur-md flex items-center justify-center z-50 p-4">
+    <div class="panel w-full max-w-sm text-center overflow-hidden">
+        <div class="p-6 md:p-8">
+            <div class="w-16 h-16 bg-brand rounded-2xl mx-auto flex items-center justify-center mb-4 text-white text-2xl shadow-lg shadow-brand/25">
+                <i class="fas fa-comments"></i>
+            </div>
+            <h1 class="text-2xl font-extrabold mb-2 text-brand-dark tracking-tight">{{ appName }}</h1>
+            <p class="text-xs text-gray-500 mb-6 leading-relaxed">برای ورود یا ثبت نام اطلاعات زیر را وارد کنید</p>
 
-                    <div class="space-y-3">
-                        <input v-model="loginForm.username" @keyup.enter="login" placeholder="نام کاربری" autocomplete="username"
-                               class="w-full p-3 border rounded-xl bg-white/80 focus:ring-2 focus:ring-brand outline-none text-center dir-rtl">
+            <div class="space-y-3">
+                <input v-model="loginForm.username" @keyup.enter="login" placeholder="نام کاربری" autocomplete="username"
+                       class="w-full p-3 border rounded-xl bg-white/90 focus:ring-2 focus:ring-brand outline-none text-center dir-rtl">
 
-                        <input v-model="loginForm.password" @keyup.enter="login" type="password" placeholder="رمز عبور" autocomplete="current-password"
-                               class="w-full p-3 border rounded-xl bg-white/80 focus:ring-2 focus:ring-brand outline-none text-center dir-rtl">
+                <input v-model="loginForm.password" @keyup.enter="login" type="password" placeholder="رمز عبور" autocomplete="current-password"
+                       class="w-full p-3 border rounded-xl bg-white/90 focus:ring-2 focus:ring-brand outline-none text-center dir-rtl">
 
-                        <button @click="login" :disabled="isAuthBusy || !loginForm.username || !loginForm.password"
-                                class="w-full bg-brand text-white py-3 rounded-xl font-extrabold hover:bg-brand-dark transition shadow-lg shadow-brand/25 disabled:opacity-60 disabled:cursor-not-allowed tap">
-                            <span v-if="!isAuthBusy">ورود / ثبت نام</span>
-                            <span v-else class="inline-flex items-center gap-2 justify-center">
-                                <i class="fas fa-circle-notch fa-spin"></i>
-                                در حال اتصال...
-                            </span>
-                        </button>
+                <button @click="login" :disabled="isAuthBusy || !loginForm.username || !loginForm.password"
+                        class="w-full bg-brand text-white py-3 rounded-xl font-extrabold hover:bg-brand-dark transition shadow-lg shadow-brand/25 disabled:opacity-60 disabled:cursor-not-allowed tap">
+                    <span v-if="!isAuthBusy">ورود / ثبت نام</span>
+                    <span v-else class="inline-flex items-center gap-2 justify-center">
+                        <i class="fas fa-circle-notch fa-spin"></i>
+                        در حال اتصال...
+                    </span>
+                </button>
 
-                        <p v-if="error" class="text-red-600 text-sm mt-2 bg-red-50 p-2 rounded-lg border border-red-100">{{ error }}</p>
-                    </div>
+                <p v-if="error" class="text-red-600 text-sm mt-2 bg-red-50 p-2 rounded-lg border border-red-100">{{ error }}</p>
+            </div>
 
-                    <div class="mt-5 text-[11px] text-gray-400 leading-relaxed">
-                        با ورود شما، یک حساب کاربری (در صورت نبود) ساخته می‌شود.
-                    </div>
-                </div>
+            <div class="mt-5 text-[11px] text-gray-400 leading-relaxed">
+                با ورود شما، یک حساب کاربری (در صورت نبود) ساخته می‌شود.
             </div>
         </div>
+    </div>
+</div>
 
         <!-- Chat Interface -->
         <div v-else class="flex h-full relative w-full overflow-hidden">
@@ -1262,7 +1227,7 @@ cat > public/index.html << 'EOF'
             </div>
 
             <!-- Mobile Sidebar Overlay -->
-            <div v-if="showSidebar" @click="showSidebar = false" class="absolute inset-0 bg-black/50 z-10 md:hidden"></div>
+<div v-if="showSidebar" @click="showSidebar = false" class="absolute inset-0 bg-white/70 backdrop-blur-sm z-10 md:hidden"></div>
 
             <!-- Chat Area -->
             <div class="flex-1 flex flex-col relative h-full min-w-0" style="background: var(--bg-chat);">
@@ -1444,51 +1409,51 @@ cat > public/index.html << 'EOF'
         </div>
         
         <!-- Admin Settings Modal -->
-        <div v-if="showAdminSettings" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div class="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden flex flex-col">
-                <div class="p-4 border-b flex justify-between items-center bg-gray-50">
-                    <h3 class="font-bold text-gray-700">تنظیمات چت روم</h3>
-                    <button @click="showAdminSettings = false" class="text-gray-400 hover:text-gray-600"><i class="fas fa-times"></i></button>
-                </div>
-                <div class="p-6 space-y-4">
-                    <div class="flex items-center justify-between">
-                        <label class="text-sm font-bold text-gray-700">مخفی کردن لیست کاربران</label>
-                        <input type="checkbox" v-model="adminSettings.hideUserList" class="w-5 h-5 accent-brand">
-                    </div>
-                    <p class="text-xs text-gray-500 text-justify leading-relaxed">
-                        با فعال‌سازی این گزینه، کاربران عادی قادر به مشاهده لیست افراد آنلاین نخواهند بود و فقط خودشان و ادمین‌ها را می‌بینند.
-                    </p>
-                    <button @click="saveAdminSettings" class="w-full bg-brand text-white py-2 rounded-lg text-sm font-bold shadow hover:bg-brand-dark transition">
-                        ذخیره تنظیمات
-                    </button>
-                </div>
-            </div>
+<div v-if="showAdminSettings" class="fixed inset-0 bg-white/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden flex flex-col border border-black/5">
+        <div class="p-4 border-b flex justify-between items-center bg-gray-50">
+            <h3 class="font-bold text-gray-700">تنظیمات چت روم</h3>
+            <button @click="showAdminSettings = false" class="text-gray-400 hover:text-gray-600"><i class="fas fa-times"></i></button>
         </div>
+        <div class="p-6 space-y-4">
+            <div class="flex items-center justify-between">
+                <label class="text-sm font-bold text-gray-700">مخفی کردن لیست کاربران</label>
+                <input type="checkbox" v-model="adminSettings.hideUserList" class="w-5 h-5 accent-brand">
+            </div>
+            <p class="text-xs text-gray-500 text-justify leading-relaxed">
+                با فعال‌سازی این گزینه، کاربران عادی قادر به مشاهده لیست افراد آنلاین نخواهند بود و فقط خودشان و ادمین‌ها را می‌بینند.
+            </p>
+            <button @click="saveAdminSettings" class="w-full bg-brand text-white py-2 rounded-lg text-sm font-bold shadow hover:bg-brand-dark transition">
+                ذخیره تنظیمات
+            </button>
+        </div>
+    </div>
+</div>
 
         <!-- Ban List Modal -->
-        <div v-if="showBanModal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div class="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden flex flex-col max-h-[80vh]">
-                <div class="p-4 border-b flex justify-between items-center bg-gray-50">
-                    <h3 class="font-bold text-gray-700">لیست سیاه (بن شده‌ها)</h3>
-                    <button @click="showBanModal = false" class="text-gray-400 hover:text-gray-600"><i class="fas fa-times"></i></button>
-                </div>
-                <div class="overflow-y-auto p-4 flex-1">
-                    <div v-if="bannedUsers.length === 0" class="text-center text-gray-400 py-4">هیچ کاربری بن نشده است.</div>
-                    <ul class="divide-y">
-                        <li v-for="u in bannedUsers" :key="u" class="py-3 flex justify-between items-center">
-                            <span class="font-bold text-gray-700">{{ u }}</span>
-                            <button @click="unbanUser(u)" class="text-xs bg-green-100 text-green-700 px-3 py-1 rounded hover:bg-green-200">آزاد کردن</button>
-                        </li>
-                    </ul>
-                </div>
-            </div>
+<div v-if="showBanModal" class="fixed inset-0 bg-white/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden flex flex-col max-h-[80vh] border border-black/5">
+        <div class="p-4 border-b flex justify-between items-center bg-gray-50">
+            <h3 class="font-bold text-gray-700">لیست سیاه (بن شده‌ها)</h3>
+            <button @click="showBanModal = false" class="text-gray-400 hover:text-gray-600"><i class="fas fa-times"></i></button>
         </div>
+        <div class="overflow-y-auto p-4 flex-1">
+            <div v-if="bannedUsers.length === 0" class="text-center text-gray-400 py-4">هیچ کاربری بن نشده است.</div>
+            <ul class="divide-y">
+                <li v-for="u in bannedUsers" :key="u" class="py-3 flex justify-between items-center">
+                    <span class="font-bold text-gray-700">{{ u }}</span>
+                    <button @click="unbanUser(u)" class="text-xs bg-green-100 text-green-700 px-3 py-1 rounded hover:bg-green-200">آزاد کردن</button>
+                </li>
+            </ul>
+        </div>
+    </div>
+</div>
 
         <!-- Lightbox -->
-        <div v-if="lightboxImage" @click="lightboxImage = null" class="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4">
-            <img :src="lightboxImage" class="max-w-full max-h-full rounded shadow-2xl">
-            <button class="absolute top-4 right-4 text-white text-3xl">&times;</button>
-        </div>
+<div v-if="lightboxImage" @click="lightboxImage = null" class="fixed inset-0 bg-white/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
+    <img :src="lightboxImage" class="max-w-full max-h-full rounded shadow-2xl">
+    <button class="absolute top-4 right-4 text-gray-700 text-3xl">&times;</button>
+</div>
     </div>
 
     <script>
