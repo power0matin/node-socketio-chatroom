@@ -165,8 +165,15 @@ echo "[4/7] Ensuring required directories exist..."
 mkdir -p "$DIR/data" "$DIR/public/uploads"
 chmod 700 "$DIR/data" "$DIR/public/uploads"
 
+# ---- detect server entry (supports both layouts) ----
+SERVER_ENTRY=""
+if [[ -f "$DIR/src/server.js" ]]; then
+  SERVER_ENTRY="$DIR/src/server.js"
+elif [[ -f "$DIR/server.js" ]]; then
+  SERVER_ENTRY="$DIR/server.js"
+fi
+
 REQ_FILES=(
-  "$DIR/src/server.js"
   "$DIR/package.json"
   "$DIR/public/index.html"
   "$DIR/public/assets/app.js"
@@ -174,6 +181,14 @@ REQ_FILES=(
   "$DIR/public/assets/theme.css"
   "$DIR/menu.sh"
 )
+
+# add server entry to required files
+if [[ -n "$SERVER_ENTRY" ]]; then
+  REQ_FILES+=("$SERVER_ENTRY")
+else
+  echo "ERROR: Missing server entry: expected src/server.js or server.js"
+  missing=1
+fi
 
 # PORT="$PORT" pm2 start "$DIR/src/server.js" --name "$PM2_NAME"
 
@@ -269,7 +284,7 @@ unset ADMIN_PASS
 echo "[7/7] Starting server with PM2..."
 PM2_NAME="${APP_NAME_VAL}"
 pm2 delete "$PM2_NAME" 2>/dev/null || true
-PORT="$PORT" pm2 start "$DIR/src/server.js" --name "$PM2_NAME"
+PORT="$PORT" pm2 start "$SERVER_ENTRY" --name "$PM2_NAME"
 pm2 save
 
 echo "Installing management tool from repo menu.sh ..."
