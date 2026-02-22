@@ -20,6 +20,7 @@ apt_install_if_missing() {
   local cmd="${2:-$1}"
   if ! have_cmd "$cmd"; then
     need_apt_update=1
+    apt_update_if_needed
     sudo apt-get install -y "$pkg"
   fi
 }
@@ -165,20 +166,43 @@ mkdir -p "$DIR/data" "$DIR/public/uploads"
 chmod 700 "$DIR/data" "$DIR/public/uploads"
 
 REQ_FILES=(
-  "$DIR/server.js"
+  "$DIR/src/server.js"
+  "$DIR/package.json"
   "$DIR/public/index.html"
   "$DIR/public/assets/app.js"
   "$DIR/public/assets/app.css"
   "$DIR/public/assets/theme.css"
   "$DIR/menu.sh"
-  "$DIR/package.json"
 )
+
+# PORT="$PORT" pm2 start "$DIR/src/server.js" --name "$PM2_NAME"
+
+missing=0
 for f in "${REQ_FILES[@]}"; do
   if [[ ! -f "$f" ]]; then
     echo "ERROR: Missing required file: $f"
-    exit 1
+    missing=1
   fi
 done
+
+if (( missing == 1 )); then
+  echo ""
+  echo "Your repository clone does NOT contain required runtime files."
+  echo "This usually means you haven't committed/pushed them to GitHub (branch: ${BRANCH_DEFAULT})."
+  echo ""
+  echo "Expected structure:"
+  echo "  src/server.js"
+  echo "  package.json"
+  echo "  public/index.html"
+  echo "  public/assets/{app.js,app.css,theme.css}"
+  echo ""
+  echo "What I actually see in '$DIR':"
+  (cd "$DIR" && ls -la)
+  echo ""
+  echo "Fix on your dev machine:"
+  echo "  git add server.js package.json public/ && git commit -m \"chore: add runtime files\" && git push"
+  exit 1
+fi
 
 echo "[5/7] Applying configuration (placeholders)..."
 sed -i "s|__APP_NAME_PLACEHOLDER__|$APP_NAME_VAL|g" "$DIR/public/index.html" || true
@@ -240,7 +264,7 @@ unset ADMIN_PASS
 echo "[7/7] Starting server with PM2..."
 PM2_NAME="${APP_NAME_VAL}"
 pm2 delete "$PM2_NAME" 2>/dev/null || true
-PORT="$PORT" pm2 start "$DIR/server.js" --name "$PM2_NAME"
+PORT="$PORT" pm2 start "$DIR/src/server.js" --name "$PM2_NAME"
 pm2 save
 
 echo "Installing management tool from repo menu.sh ..."
