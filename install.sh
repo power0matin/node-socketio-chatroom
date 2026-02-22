@@ -205,7 +205,12 @@ if (( missing == 1 )); then
 fi
 
 echo "[5/7] Applying configuration (placeholders)..."
-sed -i "s|__APP_NAME_PLACEHOLDER__|$APP_NAME_VAL|g" "$DIR/public/index.html" || true
+
+esc_sed() { printf '%s' "$1" | sed -e 's/[\/&|]/\\&/g'; }
+
+APP_NAME_ESC="$(esc_sed "$APP_NAME_VAL")"
+
+sed -i "s|__APP_NAME_PLACEHOLDER__|$APP_NAME_ESC|g" "$DIR/public/index.html" || true
 sed -i "s|__COLOR_DEFAULT__|$C_DEF|g" "$DIR/public/assets/theme.css" || true
 sed -i "s|__COLOR_DARK__|$C_DARK|g" "$DIR/public/assets/theme.css" || true
 sed -i "s|__COLOR_LIGHT__|$C_LIGHT|g" "$DIR/public/assets/theme.css" || true

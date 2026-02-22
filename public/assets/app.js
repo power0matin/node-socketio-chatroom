@@ -34,8 +34,11 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: "10kb" }));
 
 // -------------------- Paths --------------------
-const DATA_DIR = path.join(__dirname, "data");
-const UPLOADS_DIR = path.join(__dirname, "public/uploads");
+// server.js is inside /src, but data/ and public/ are at project root.
+const ROOT_DIR = path.join(__dirname, "..");
+const DATA_DIR = path.join(ROOT_DIR, "data");
+const PUBLIC_DIR = path.join(ROOT_DIR, "public");
+const UPLOADS_DIR = path.join(PUBLIC_DIR, "uploads");
 
 if (!fs.existsSync(DATA_DIR))
   fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
@@ -557,9 +560,6 @@ app.use("/uploads", (req, res, next) => {
     return res.status(401).send("Unauthorized");
   next();
 });
-
-// Static assets (cache assets, no-cache html)
-const PUBLIC_DIR = path.join(__dirname, "public");
 
 app.use(
   "/assets",
