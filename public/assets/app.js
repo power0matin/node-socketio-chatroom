@@ -1,1435 +1,973 @@
-const express = require("express");
-const http = require("http");
-const { Server } = require("socket.io");
-const path = require("path");
-const fs = require("fs");
-const multer = require("multer");
-const bcrypt = require("bcryptjs");
-const helmet = require("helmet");
-const xss = require("xss");
-const rateLimit = require("express-rate-limit");
-const crypto = require("crypto");
+/* public/assets/app.js
+ * Works with:
+ *  - <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+ *  - <script src="/socket.io/socket.io.js"></script>
+ *  - DOM template in index.html inside #app
+ */
 
-const app = express();
-app.disable("x-powered-by");
-app.set("trust proxy", 1);
-const server = http.createServer(app);
+(() => {
+  "use strict";
 
-// -------------------- Security headers --------------------
-app.use(
-  helmet({
-    contentSecurityPolicy: false,
-    crossOriginEmbedderPolicy: false,
-    crossOriginOpenerPolicy: false,
-  }),
-);
-
-app.use((req, res, next) => {
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("Referrer-Policy", "same-origin");
-  res.setHeader("X-Frame-Options", "DENY");
-  next();
-});
-
-app.use(express.json({ limit: "10kb" }));
-
-// -------------------- Paths --------------------
-// server.js is inside /src, but data/ and public/ are at project root.
-const ROOT_DIR = path.join(__dirname, "..");
-const DATA_DIR = path.join(ROOT_DIR, "data");
-const PUBLIC_DIR = path.join(ROOT_DIR, "public");
-const UPLOADS_DIR = path.join(PUBLIC_DIR, "uploads");
-
-if (!fs.existsSync(DATA_DIR))
-  fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-if (!fs.existsSync(UPLOADS_DIR))
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true, mode: 0o700 });
-
-const USERS_FILE = path.join(DATA_DIR, "users.json");
-const MESSAGES_FILE = path.join(DATA_DIR, "messages.json");
-const CHANNELS_FILE = path.join(DATA_DIR, "channels.json");
-const CONFIG_FILE = path.join(DATA_DIR, "config.json");
-
-const CONVERSATIONS_FILE = path.join(DATA_DIR, "conversations.json");
-const MEMBERSHIPS_FILE = path.join(DATA_DIR, "memberships.json");
-const ATTACHMENTS_FILE = path.join(DATA_DIR, "attachments.json");
-
-function readJsonSafe(file, fallback) {
-  try {
-    if (!fs.existsSync(file)) return fallback;
-    return JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch {
-    return fallback;
+  if (!window.Vue) {
+    console.error("Vue global not found. Did you load vue.global.js?");
+    return;
   }
-}
-
-function atomicWriteJson(file, obj, mode = 0o600) {
-  const tmp = file + "." + crypto.randomBytes(6).toString("hex") + ".tmp";
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), { mode });
-  fs.renameSync(tmp, file);
-  try {
-    fs.chmodSync(file, mode);
-  } catch {}
-}
-
-// -------------------- Data-at-rest encryption (AES-256-GCM) --------------------
-function keyFromHex(hex) {
-  try {
-    const h = String(hex || "").trim();
-    if (!h) return null;
-    const buf = Buffer.from(h, "hex");
-    return buf.length === 32 ? buf : null;
-  } catch {
-    return null;
-  }
-}
-
-function encryptPayload(key, obj) {
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
-  const plaintext = Buffer.from(JSON.stringify(obj), "utf8");
-  const enc = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  return {
-    v: 1,
-    alg: "A256GCM",
-    iv: iv.toString("base64"),
-    tag: tag.toString("base64"),
-    data: enc.toString("base64"),
-  };
-}
-
-function decryptPayload(key, wrapper) {
-  const iv = Buffer.from(String(wrapper.iv || ""), "base64");
-  const tag = Buffer.from(String(wrapper.tag || ""), "base64");
-  const data = Buffer.from(String(wrapper.data || ""), "base64");
-  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
-  decipher.setAuthTag(tag);
-  const dec = Buffer.concat([decipher.update(data), decipher.final()]);
-  return JSON.parse(dec.toString("utf8"));
-}
-
-function isEncryptedWrapper(obj) {
-  return !!(
-    obj &&
-    typeof obj === "object" &&
-    obj.v === 1 &&
-    obj.alg === "A256GCM" &&
-    obj.iv &&
-    obj.tag &&
-    obj.data
-  );
-}
-
-function readJsonSecure(file, fallback) {
-  try {
-    if (!fs.existsSync(file)) return fallback;
-    const raw = fs.readFileSync(file, "utf8");
-    if (!raw) return fallback;
-
-    const parsed = JSON.parse(raw);
-
-    const key = keyFromHex(appConfig.dataEncKey);
-    if (key && isEncryptedWrapper(parsed)) return decryptPayload(key, parsed);
-
-    return parsed;
-  } catch {
-    return fallback;
-  }
-}
-
-function atomicWriteJsonSecure(file, obj, mode = 0o600) {
-  const key = keyFromHex(appConfig.dataEncKey);
-  const payload = key ? encryptPayload(key, obj) : obj;
-  atomicWriteJson(file, payload, mode);
-}
-
-// -------------------- Config --------------------
-let appConfig = {
-  adminUser: "admin",
-  adminPassHash: "",
-  port: 3000,
-  maxFileSizeMB: 50,
-  appName: "node-socketio-chatroom",
-  hideUserList: false,
-  allowedOrigins: "*",
-  protectUploads: true,
-  dataEncKey: "",
-  // ✅ NEW: channel access policy
-  accessMode: "restricted", // 'restricted' | 'open'
-  defaultChannelsForNewUsers: [], // e.g. ['General'] if you want
-};
-
-function normalizeOrigins(val) {
-  if (val === "*" || val === undefined || val === null) return "*";
-  if (Array.isArray(val))
-    return val.map((s) => String(s).trim()).filter(Boolean);
-  const s = String(val).trim();
-  if (!s) return "*";
-  if (s === "*") return "*";
-  return s
-    .split(",")
-    .map((x) => x.trim())
-    .filter(Boolean);
-}
-
-let lastConfigMtimeMs = 0;
-
-function loadAndSecureConfig(force = false) {
-  try {
-    let stat;
-    try {
-      stat = fs.statSync(CONFIG_FILE);
-    } catch {
-      stat = null;
-    }
-
-    const mtimeMs = stat ? stat.mtimeMs : 0;
-    if (!force && mtimeMs && mtimeMs === lastConfigMtimeMs) return false;
-
-    let saveNeeded = false;
-    const fileConfig = readJsonSafe(CONFIG_FILE, null);
-
-    if (fileConfig) appConfig = { ...appConfig, ...fileConfig };
-    else saveNeeded = true;
-
-    if (appConfig.adminPass && !appConfig.adminPassHash) {
-      appConfig.adminPassHash = bcrypt.hashSync(
-        String(appConfig.adminPass),
-        12,
-      );
-      delete appConfig.adminPass;
-      saveNeeded = true;
-    }
-
-    if (
-      appConfig.adminPassHash &&
-      !String(appConfig.adminPassHash).startsWith("$2")
-    ) {
-      appConfig.adminPassHash = bcrypt.hashSync(
-        String(appConfig.adminPassHash),
-        12,
-      );
-      saveNeeded = true;
-    }
-
-    appConfig.allowedOrigins = normalizeOrigins(appConfig.allowedOrigins);
-
-    if (
-      !["restricted", "open"].includes(
-        String(appConfig.accessMode || "restricted"),
-      )
-    ) {
-      appConfig.accessMode = "restricted";
-      saveNeeded = true;
-    }
-    if (!Array.isArray(appConfig.defaultChannelsForNewUsers)) {
-      appConfig.defaultChannelsForNewUsers = [];
-      saveNeeded = true;
-    }
-
-    if (saveNeeded) atomicWriteJson(CONFIG_FILE, appConfig, 0o600);
-
-    try {
-      const st2 = fs.statSync(CONFIG_FILE);
-      lastConfigMtimeMs = st2.mtimeMs;
-    } catch {
-      lastConfigMtimeMs = mtimeMs || 0;
-    }
-
-    return true;
-  } catch (e) {
-    console.error("Error loading config:", e);
-    return false;
-  }
-}
-
-loadAndSecureConfig(true);
-
-const PORT = Number(process.env.PORT || appConfig.port || 3000);
-
-// -------------------- Socket.io --------------------
-const corsOption = (() => {
-  const origins = appConfig.allowedOrigins;
-  if (origins === "*") return { origin: "*", methods: ["GET", "POST"] };
-
-  return {
-    origin: (origin, cb) => {
-      // allow no-origin for same-host / server-side tools
-      if (!origin) return cb(null, true);
-
-      // strict allow-list
-      return origins.includes(origin) ? cb(null, true) : cb(null, false);
-    },
-    methods: ["GET", "POST"],
-  };
-})();
-
-const io = new Server(server, {
-  // keep socket payload small; files go via /upload
-  maxHttpBufferSize: 2e6, // ~2MB
-  cors: corsOption,
-});
-
-// -------------------- In-memory state --------------------
-let users = {};
-let persistentUsers = {};
-let channels = ["General", "Random"];
-
-let messages = {};
-let userRateLimits = {};
-
-let conversations = {};
-let memberships = {};
-let attachments = {};
-
-// upload auth: token -> expiry
-const uploadTokens = new Map();
-setInterval(() => {
-  const now = Date.now();
-  for (const [t, v] of uploadTokens.entries()) {
-    if (!v || v.exp <= now) uploadTokens.delete(t);
-  }
-}, 60_000).unref();
-
-// Load data
-persistentUsers = readJsonSecure(USERS_FILE, {});
-channels = readJsonSecure(CHANNELS_FILE, channels);
-messages = readJsonSecure(MESSAGES_FILE, {});
-conversations = readJsonSecure(CONVERSATIONS_FILE, {});
-memberships = readJsonSecure(MEMBERSHIPS_FILE, {});
-attachments = readJsonSecure(ATTACHMENTS_FILE, {});
-
-// -------------------- Helpers --------------------
-function cleanUsername(username) {
-  return xss(String(username || "").trim()).substring(0, 20);
-}
-function cleanText(text, max = 1000) {
-  const s = xss(String(text || ""));
-  return s.length > max ? s.substring(0, max) : s;
-}
-function cleanChannelName(name) {
-  return xss(String(name || "").trim()).substring(0, 30);
-}
-
-function ensureConversationMaps(conversationId) {
-  if (!memberships[conversationId]) memberships[conversationId] = {};
-  if (!messages[conversationId]) messages[conversationId] = [];
-}
-
-function isMember(conversationId, username) {
-  return !!(
-    memberships[conversationId] && memberships[conversationId][username]
-  );
-}
-
-function addMember(conversationId, username, role = "member") {
-  ensureConversationMaps(conversationId);
-  if (!memberships[conversationId][username]) {
-    memberships[conversationId][username] = {
-      role,
-      joinedAt: Date.now(),
-      lastReadMessageId: null,
-    };
-  }
-}
-
-function removeMember(conversationId, username) {
-  if (!memberships[conversationId]) return;
-  delete memberships[conversationId][username];
-}
-
-function ensurePublicConversation(channelName, createdBy = "system") {
-  const id = channelName;
-  if (!conversations[id]) {
-    conversations[id] = {
-      id,
-      type: "public",
-      title: channelName,
-      isHidden: false,
-      createdBy,
-      createdAt: Date.now(),
-    };
-  }
-  ensureConversationMaps(id);
-  return conversations[id];
-}
-
-function dmKeyFor(u1, u2) {
-  const a = String(u1 || "").trim();
-  const b = String(u2 || "").trim();
-  return [a, b].sort().join("_pv_");
-}
-
-function getOrCreateDMConversation(u1, u2) {
-  const key = dmKeyFor(u1, u2);
-  if (!conversations[key]) {
-    conversations[key] = {
-      id: key,
-      type: "dm",
-      title: `DM: ${u1}, ${u2}`,
-      isHidden: true,
-      dmKey: key,
-      createdBy: u1,
-      createdAt: Date.now(),
-    };
-    ensureConversationMaps(key);
-  }
-  addMember(key, u1, "owner");
-  addMember(key, u2, "member");
-  return conversations[key];
-}
-
-function isValidDMId(dmId) {
-  if (!dmId || typeof dmId !== "string") return false;
-  if (!dmId.includes("_pv_")) return false;
-  const parts = dmId
-    .split("_pv_")
-    .map((x) => x.trim())
-    .filter(Boolean);
-  return parts.length === 2 && parts[0] !== parts[1];
-}
-
-function dmParticipants(dmId) {
-  const parts = String(dmId || "")
-    .split("_pv_")
-    .map((x) => x.trim());
-  if (parts.length !== 2) return null;
-  return { a: parts[0], b: parts[1] };
-}
-
-function canAccessDM(user, dmId) {
-  if (!user) return false;
-  if (!isValidDMId(dmId)) return false;
-  const p = dmParticipants(dmId);
-  if (!p) return false;
-  return user.username === p.a || user.username === p.b;
-}
-
-function savedConvIdFor(username) {
-  return `__saved__${String(username || "").trim()}`;
-}
-
-function isSavedConvId(convId) {
-  return typeof convId === "string" && convId.startsWith("__saved__");
-}
-
-// ✅ NEW: access checks
-function canAccessChannel(username, role, channelName) {
-  const ch = String(channelName || "").trim();
-  if (!ch) return false;
-  if (role === "admin") return true;
-
-  // open mode: all users can access public channels
-  if (appConfig.accessMode === "open") return true;
-
-  // restricted: must be explicitly member
-  return isMember(ch, username);
-}
-
-function listAccessibleChannels(username, role) {
-  if (role === "admin") return [...channels];
-  if (appConfig.accessMode === "open") return [...channels];
-  // restricted
-  return channels.filter((ch) => isMember(ch, username));
-}
-
-function saveData() {
-  try {
-    atomicWriteJsonSecure(USERS_FILE, persistentUsers, 0o600);
-    atomicWriteJsonSecure(CHANNELS_FILE, channels, 0o600);
-    atomicWriteJsonSecure(MESSAGES_FILE, messages, 0o600);
-    atomicWriteJsonSecure(CONVERSATIONS_FILE, conversations, 0o600);
-    atomicWriteJsonSecure(MEMBERSHIPS_FILE, memberships, 0o600);
-    atomicWriteJsonSecure(ATTACHMENTS_FILE, attachments, 0o600);
-  } catch (e) {
-    console.error("Error saving data", e);
-  }
-}
-setInterval(saveData, 30_000).unref();
-
-// migrate users plaintext -> hash (backward compat)
-(function migrateUsersIfNeeded() {
-  let changed = false;
-  for (const [u, data] of Object.entries(persistentUsers)) {
-    if (!data) continue;
-
-    if (data.password && !data.passHash) {
-      data.passHash = bcrypt.hashSync(String(data.password), 12);
-      delete data.password;
-      changed = true;
-    }
-    if (data.passHash && !String(data.passHash).startsWith("$2")) {
-      data.passHash = bcrypt.hashSync(String(data.passHash), 12);
-      changed = true;
-    }
-  }
-  if (changed) saveData();
-})();
-
-// ensure default channels have public conversations
-(function ensureDefaults() {
-  for (const ch of channels) ensurePublicConversation(ch, "system");
-  saveData();
-})();
-
-// -------------------- Upload --------------------
-const uploadLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: "Too many uploads from this IP, please try again later",
-});
-
-const allowedMimes = new Set([
-  "image/jpeg",
-  "image/png",
-  "image/gif",
-  "image/webp",
-  "audio/webm",
-  "audio/mpeg",
-  "video/mp4",
-  "video/webm",
-  "application/pdf",
-  "text/plain",
-]);
-
-const allowedExt = new Set([
-  ".jpg",
-  ".jpeg",
-  ".png",
-  ".gif",
-  ".webp",
-  ".webm",
-  ".mp3",
-  ".mp4",
-  ".pdf",
-  ".txt",
-]);
-
-function safeExt(originalname) {
-  const ext = path.extname(String(originalname || "")).toLowerCase();
-  return allowedExt.has(ext) ? ext : "";
-}
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOADS_DIR),
-  filename: (_req, file, cb) => {
-    const ext = safeExt(file.originalname);
-    const name = crypto.randomBytes(16).toString("hex") + ext;
-    cb(null, name);
-  },
-});
-
-let uploadSingle = null;
-let lastUploadLimitBytes = 0;
-
-function rebuildUploadMiddleware() {
-  const limitBytes = Number(appConfig.maxFileSizeMB || 50) * 1024 * 1024;
-  if (uploadSingle && limitBytes === lastUploadLimitBytes) return;
-
-  lastUploadLimitBytes = limitBytes;
-
-  const upload = multer({
-    storage,
-    limits: { fileSize: limitBytes },
-    fileFilter: (_req, file, cb) => {
-      if (!allowedMimes.has(file.mimetype))
-        return cb(new Error("DISALLOWED_MIME"));
-      if (!safeExt(file.originalname)) return cb(new Error("DISALLOWED_EXT"));
-      cb(null, true);
-    },
-  });
-
-  uploadSingle = upload.single("file");
-}
-
-rebuildUploadMiddleware();
-
-setInterval(() => {
-  const changed = loadAndSecureConfig(false);
-  if (changed) rebuildUploadMiddleware();
-}, 5000).unref();
-
-// Protect downloads if enabled
-app.use("/uploads", (req, res, next) => {
-  if (!appConfig.protectUploads) return next();
-
-  const tok = String(req.headers["x-upload-token"] || req.query.t || "");
-  const rec = uploadTokens.get(tok);
-  if (!rec || rec.exp <= Date.now())
-    return res.status(401).send("Unauthorized");
-  next();
-});
-
-// ✅ Serve uploads
-app.use("/uploads", express.static(UPLOADS_DIR));
-
-// Serve uploads from the correct folder at project root
-app.use("/uploads", express.static(UPLOADS_DIR));
-
-app.use(express.static(PUBLIC_DIR));
-
-app.get("/", (_req, res) => {
-  res.sendFile(path.join(PUBLIC_DIR, "index.html"));
-});
-
-app.post("/upload", uploadLimiter, (req, res) => {
-  const tok = String(req.headers["x-upload-token"] || "");
-  const rec = uploadTokens.get(tok);
-  if (!rec || rec.exp <= Date.now())
-    return res.status(401).json({ error: "Unauthorized upload." });
-
-  if (!uploadSingle) rebuildUploadMiddleware();
-
-  uploadSingle(req, res, function (err) {
-    if (err instanceof multer.MulterError)
-      return res.status(400).json({ error: "File too large or upload error." });
-    if (err) return res.status(400).json({ error: "File type not allowed." });
-    if (!req.file) return res.status(400).json({ error: "No file sent." });
-
-    const cleanOriginal = xss(String(req.file.originalname || "")).substring(
-      0,
-      120,
+  if (!window.io) {
+    console.error(
+      "Socket.IO client not found. Did you load /socket.io/socket.io.js?",
     );
-    res.json({
-      url: "/uploads/" + req.file.filename,
-      filename: cleanOriginal,
-      size: req.file.size,
-      mimetype: req.file.mimetype,
-    });
-  });
-});
-
-// -------------------- Online users list --------------------
-function getUniqueOnlineUsers() {
-  const unique = {};
-  Object.values(users).forEach((u) => {
-    unique[u.username] = u;
-  });
-  return Object.values(unique);
-}
-
-function broadcastUserList() {
-  const allUsers = getUniqueOnlineUsers();
-  const admins = allUsers.filter((u) => u.role === "admin");
-
-  io.sockets.sockets.forEach((socket) => {
-    const user = users[socket.id];
-    if (!user) return;
-
-    if (user.role === "admin") socket.emit("user_list", allUsers);
-    else {
-      if (appConfig.hideUserList) {
-        const visible = [...admins];
-        if (!visible.find((a) => a.username === user.username))
-          visible.push(user);
-        socket.emit("user_list", visible);
-      } else {
-        socket.emit("user_list", allUsers);
-      }
-    }
-  });
-}
-
-function getBannedUsers() {
-  return Object.keys(persistentUsers).filter(
-    (u) => persistentUsers[u]?.isBanned,
-  );
-}
-
-// -------------------- Login rate limit --------------------
-const loginAttempts = new Map();
-
-function getSocketIp(socket) {
-  const xf = socket.handshake.headers["x-forwarded-for"];
-  if (xf && typeof xf === "string") return xf.split(",")[0].trim();
-  return String(socket.handshake.address || "").trim() || "unknown";
-}
-
-function loginKey(ip, username) {
-  return `${ip}::${String(username || "").toLowerCase()}`;
-}
-
-function isLoginLimited(ip, username) {
-  const key = loginKey(ip, username);
-  const now = Date.now();
-  const rec = loginAttempts.get(key);
-
-  const windowMs = 10 * 60 * 1000;
-  const max = 12;
-
-  if (!rec) return false;
-
-  if (now - rec.first > windowMs) {
-    loginAttempts.delete(key);
-    return false;
-  }
-
-  return rec.count >= max;
-}
-
-function recordLoginFail(ip, username) {
-  const key = loginKey(ip, username);
-  const now = Date.now();
-  const rec = loginAttempts.get(key);
-
-  if (!rec) {
-    loginAttempts.set(key, { count: 1, first: now, last: now });
     return;
   }
 
-  rec.count += 1;
-  rec.last = now;
-  loginAttempts.set(key, rec);
-}
+  const { createApp, ref, onMounted, nextTick, computed } = window.Vue;
+  const socket = window.io();
 
-function clearLoginFails(ip, username) {
-  loginAttempts.delete(loginKey(ip, username));
-}
+  // lightweight notification sound (same as your old inline)
+  const notifyAudio = new Audio(
+    "data:audio/mp3;base64,//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+  );
 
-setInterval(() => {
-  const now = Date.now();
-  const windowMs = 10 * 60 * 1000;
-  for (const [k, v] of loginAttempts.entries()) {
-    if (!v || now - v.first > windowMs) loginAttempts.delete(k);
-  }
-}, 60_000).unref();
+  createApp({
+    setup() {
+      // ---- auth / core ----
+      const isLoggedIn = ref(false);
+      const user = ref({ username: "", role: "user" });
+      const loginForm = ref({ username: "", password: "" });
+      const error = ref("");
+      const appName = ref(document.title || "Chatroom");
 
-// -------------------- Socket events --------------------
-io.on("connection", (socket) => {
-  // ✅ safe channel join (enforced access)
-  function joinChannelCompat(sock, channelName) {
-    const user = users[sock.id];
-    if (!user) return;
+      const isConnected = ref(socket.connected);
+      const isAuthBusy = ref(false);
 
-    const clean = cleanChannelName(channelName);
-    if (!clean) return;
+      // ---- channels / views ----
+      const channels = ref([]);
+      const currentChannel = ref("");
+      const isPrivateChat = ref(false);
+      const isSavedView = ref(false);
+      const displayChannelName = ref("");
 
-    // channel must exist
-    if (!channels.includes(clean))
-      return sock.emit("error", "کانال وجود ندارد.");
+      // messages
+      const messages = ref([]);
+      const msgContainer = ref(null);
 
-    // enforce access
-    if (!canAccessChannel(user.username, user.role, clean)) {
-      return sock.emit("access_denied", {
-        channel: clean,
-        message: "شما به این کانال دسترسی ندارید.",
+      // composer
+      const messageText = ref("");
+
+      // sidebar / ui
+      const showSidebar = ref(false);
+
+      // create channel
+      const showCreateChannelInput = ref(false);
+      const newChannelName = ref("");
+
+      // lightbox
+      const lightboxImage = ref(null);
+
+      // bans
+      const showBanModal = ref(false);
+      const bannedUsers = ref([]);
+
+      // admin settings
+      const showAdminSettings = ref(false);
+      const adminSettings = ref({
+        hideUserList: false,
+        accessMode: "restricted",
       });
-    }
 
-    ensurePublicConversation(clean, "system");
-    addMember(clean, user.username, "member");
+      // unread (channels + DM partner usernames)
+      const unreadCounts = ref({});
 
-    sock.join(clean);
-    sock.emit("channel_joined", { name: clean, isPrivate: false });
-    sock.emit("history", Array.isArray(messages[clean]) ? messages[clean] : []);
-  }
+      // search
+      const searchResults = ref([]);
+      const searchQuery = ref("");
 
-  socket.on("join_saved", () => {
-    const user = users[socket.id];
-    if (!user) return;
+      // online users
+      const onlineUsers = ref([]);
 
-    const sid = savedConvIdFor(user.username);
-    ensureConversationMaps(sid);
+      // reply
+      const replyingTo = ref(null);
 
-    // اینجا room = sid
-    socket.join(sid);
+      // context menu (message/user)
+      const contextMenu = ref({
+        visible: false,
+        x: 0,
+        y: 0,
+        target: null,
+        type: null,
+      });
 
-    socket.emit("channel_joined", {
-      name: sid,
-      isPrivate: true,
-      isSaved: true,
-    });
-    socket.emit("history", Array.isArray(messages[sid]) ? messages[sid] : []);
-  });
+      // swipe-to-reply
+      const swipeId = ref(null);
+      const swipeStartX = ref(0);
+      const swipeOffset = ref(0);
 
-  function emitAccessSnapshotToAdmin(adminSocket) {
-    const u = users[adminSocket.id];
-    if (!u || u.role !== "admin") return;
+      // audio record
+      const isRecording = ref(false);
+      let mediaRecorder = null;
+      let audioChunks = [];
 
-    const result = {};
-    for (const uname of Object.keys(persistentUsers)) {
-      result[uname] = {};
-      for (const ch of channels) {
-        result[uname][ch] = isMember(ch, uname);
-      }
-    }
-    adminSocket.emit("admin_access_snapshot", { channels, map: result });
-  }
+      // upload
+      const fileInput = ref(null);
+      const isUploading = ref(false);
+      const uploadProgress = ref(0);
 
-  socket.on("login", ({ username, password }) => {
-    loadAndSecureConfig();
+      // scroll down button
+      const showScrollDown = ref(false);
 
-    const ip = getSocketIp(socket);
+      // access modal (admin)
+      const showAccessModal = ref(false);
+      const accessModalUser = ref("");
+      const accessChannels = ref([]);
+      const accessMap = ref({});
+      const accessDeniedBanner = ref("");
 
-    const u = cleanUsername(username);
-    const p = String(password || "");
-    if (isLoginLimited(ip, u))
-      return socket.emit(
-        "login_error",
-        "تلاش‌های ورود زیاد است. چند دقیقه بعد دوباره امتحان کنید.",
+      // server-provided settings/token
+      const appSettings = ref({ maxFileSizeMB: 50, accessMode: "restricted" });
+      const uploadToken = ref("");
+
+      // ---- computed ----
+      const canCreateChannel = computed(
+        () => user.value.role === "admin" || user.value.role === "vip",
       );
-    if (!u || !p) {
-      recordLoginFail(ip, u || "");
-      return socket.emit("login_error", "نام کاربری و رمز عبور الزامی است");
-    }
+      const canBan = computed(
+        () => user.value.role === "admin" || user.value.role === "vip",
+      );
 
-    // Admin login
-    if (u === appConfig.adminUser) {
-      const ok =
-        appConfig.adminPassHash &&
-        bcrypt.compareSync(p, appConfig.adminPassHash);
-      if (!ok) {
-        recordLoginFail(ip, u);
-        return socket.emit("login_error", "رمز عبور ادمین اشتباه است.");
-      }
-
-      clearLoginFails(ip, u);
-      users[socket.id] = { username: u, role: "admin" };
-
-      const uploadToken = crypto.randomBytes(24).toString("hex");
-      uploadTokens.set(uploadToken, {
-        username: u,
-        exp: Date.now() + 6 * 60 * 60 * 1000,
+      const sortedUsers = computed(() => {
+        const roles = { admin: 3, vip: 2, user: 1 };
+        return [...(onlineUsers.value || [])].sort(
+          (a, b) => (roles[b.role] || 0) - (roles[a.role] || 0),
+        );
       });
 
-      for (const ch of channels) ensurePublicConversation(ch, "system");
-
-      // admin always member to all channels in restricted mode
-      if (appConfig.accessMode === "restricted") {
-        for (const ch of channels) addMember(ch, u, "owner");
-      }
-
-      socket.emit("login_success", {
-        username: u,
-        role: "admin",
-        channels: [...channels],
-        settings: {
-          maxFileSizeMB: appConfig.maxFileSizeMB,
-          appName: appConfig.appName,
-          hideUserList: appConfig.hideUserList,
-          accessMode: appConfig.accessMode,
-        },
-        uploadToken,
+      const canSend = computed(() => {
+        const t = (messageText.value || "").trim();
+        if (!t) return false;
+        if (!isConnected.value) return false;
+        if (!currentChannel.value) return false;
+        return true;
       });
 
-      // auto-join General if exists
-      if (channels.includes("General")) joinChannelCompat(socket, "General");
-
-      broadcastUserList();
-      emitAccessSnapshotToAdmin(socket);
-      return;
-    }
-
-    // Normal user login/register
-    const existing = persistentUsers[u];
-    if (existing) {
-      if (existing.isBanned) {
-        recordLoginFail(ip, u);
-        return socket.emit("login_error", "حساب کاربری شما مسدود شده است.");
-      }
-      if (!existing.passHash || !bcrypt.compareSync(p, existing.passHash)) {
-        recordLoginFail(ip, u);
-        return socket.emit("login_error", "رمز عبور اشتباه است.");
-      }
-    } else {
-      persistentUsers[u] = {
-        passHash: bcrypt.hashSync(p, 12),
-        role: "user",
-        isBanned: false,
-        created_at: Date.now(),
+      // ---- utils ----
+      const playSound = () => {
+        try {
+          notifyAudio.currentTime = 0;
+          notifyAudio.play().catch(() => {});
+        } catch {}
       };
 
-      // ✅ optional: default channels for new users
-      if (
-        appConfig.accessMode === "restricted" &&
-        Array.isArray(appConfig.defaultChannelsForNewUsers)
-      ) {
-        for (const ch of appConfig.defaultChannelsForNewUsers) {
-          const cleanCh = cleanChannelName(ch);
-          if (cleanCh && channels.includes(cleanCh))
-            addMember(cleanCh, u, "member");
+      const notify = (title, body) => {
+        playSound();
+        try {
+          if (
+            "Notification" in window &&
+            Notification.permission === "granted"
+          ) {
+            new Notification(title, { body, icon: "/favicon.ico" });
+          }
+        } catch {}
+      };
+
+      const scrollToBottom = (force = false) => {
+        nextTick(() => {
+          const c =
+            document.getElementById("messages-container") || msgContainer.value;
+          if (!c) return;
+
+          // force: always go bottom
+          if (force) {
+            c.scrollTop = c.scrollHeight;
+            return;
+          }
+
+          // default: go bottom
+          c.scrollTop = c.scrollHeight;
+        });
+      };
+
+      const scrollToMessage = (id) => {
+        if (!id) return;
+        const el = document.getElementById("msg-" + id);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      };
+
+      const safeLink = (u) => {
+        try {
+          const s = String(u || "").trim();
+          if (!s) return "#";
+          if (s.startsWith("/uploads/")) return s; // allow protected uploads
+          if (s.startsWith("data:")) return "#"; // block for download
+          return "#";
+        } catch {
+          return "#";
         }
-      }
-    }
-
-    clearLoginFails(ip, u);
-    persistentUsers[u].last_seen = Date.now();
-
-    const role = persistentUsers[u].role || "user";
-    users[socket.id] = { username: u, role };
-
-    const uploadToken = crypto.randomBytes(24).toString("hex");
-    uploadTokens.set(uploadToken, {
-      username: u,
-      exp: Date.now() + 6 * 60 * 60 * 1000,
-    });
-
-    for (const ch of channels) ensurePublicConversation(ch, "system");
-
-    const accessible = listAccessibleChannels(u, role);
-
-    socket.emit("login_success", {
-      username: u,
-      role,
-      channels: accessible,
-      settings: {
-        maxFileSizeMB: appConfig.maxFileSizeMB,
-        appName: appConfig.appName,
-        hideUserList: appConfig.hideUserList,
-        accessMode: appConfig.accessMode,
-      },
-      uploadToken,
-    });
-
-    // auto-join first accessible channel (if any)
-    if (accessible.length > 0) joinChannelCompat(socket, accessible[0]);
-
-    saveData();
-    broadcastUserList();
-  });
-
-  socket.on("join_channel", (channel) => {
-    joinChannelCompat(socket, channel);
-  });
-
-  socket.on("join_private", (targetUser, cb) => {
-    const currentUser = users[socket.id];
-    if (!currentUser) return;
-
-    const cleanTarget = cleanUsername(targetUser);
-    if (!cleanTarget || cleanTarget === currentUser.username) {
-      if (typeof cb === "function") cb({ ok: false, error: "INVALID_TARGET" });
-      return;
-    }
-
-    // ✅ اجازه DM به ادمین حتی اگر داخل users.json نباشد
-    const isAdminTarget = cleanTarget === appConfig.adminUser;
-
-    // ✅ یا کاربر ثبت‌نام‌شده باشد و بن نشده باشد
-    const isRegisteredTarget =
-      !!persistentUsers[cleanTarget] && !persistentUsers[cleanTarget]?.isBanned;
-
-    if (!isAdminTarget && !isRegisteredTarget) {
-      if (typeof cb === "function")
-        cb({ ok: false, error: "TARGET_NOT_FOUND" });
-      return;
-    }
-
-    const dm = getOrCreateDMConversation(currentUser.username, cleanTarget);
-
-    for (const r of socket.rooms) {
-      if (r !== socket.id) socket.leave(r);
-    }
-
-    socket.join(dm.id);
-
-    if (typeof cb === "function") cb({ ok: true, dmId: dm.id });
-
-    socket.emit("channel_joined", {
-      name: dm.id,
-      isPrivate: true,
-      isSaved: false,
-    });
-    socket.emit(
-      "history",
-      Array.isArray(messages[dm.id]) ? messages[dm.id] : [],
-    );
-  });
-
-  // -------------------- Saved Messages --------------------
-  socket.on("saved_delete", (msgId) => {
-    const user = users[socket.id];
-    if (!user) return;
-
-    const sid = savedConvIdFor(user.username);
-    const id = String(msgId || "").trim();
-    if (!id) return;
-
-    ensureConversationMaps(sid);
-
-    const before = messages[sid].length;
-    messages[sid] = messages[sid].filter((m) => m && m.id !== id);
-
-    if (messages[sid].length !== before) {
-      io.to(sid).emit("message_deleted", { channel: sid, id });
-      saveData();
-    }
-  });
-
-  socket.on("save_message", (payload) => {
-    const user = users[socket.id];
-    if (!user) return;
-
-    const item = payload && typeof payload === "object" ? payload : null;
-    if (!item) return;
-
-    const originalId = String(item.originalId || item.id || "").trim();
-    const from = cleanUsername(item.from || item.sender || "");
-    const srcChannel = cleanChannelName(
-      item.channel || item.conversationId || "",
-    );
-    const type = String(item.type || "text");
-    const text = cleanText(item.text || "", 1000);
-    const content = typeof item.content === "string" ? item.content : undefined;
-    const fileName = item.fileName
-      ? xss(String(item.fileName)).substring(0, 120)
-      : undefined;
-
-    if (!originalId || !from) return;
-
-    const sid = savedConvIdFor(user.username);
-    ensureConversationMaps(sid);
-
-    // جلوگیری از duplicate: داخل saved chat دنبال originalId می‌گردیم
-    const exists =
-      Array.isArray(messages[sid]) &&
-      messages[sid].some(
-        (m) => m && m.meta && m.meta.originalId === originalId,
-      );
-    if (exists)
-      return socket.emit("action_success", "این پیام قبلاً ذخیره شده است.");
-
-    const msg = {
-      id: crypto.randomBytes(12).toString("hex"),
-      sender: from, // برای اینکه تو Saved سمت چپ نمایش داده شود
-      text,
-      type,
-      content,
-      fileName,
-      conversationId: sid,
-      channel: sid,
-      replyTo: null,
-      timestamp: new Date().toLocaleTimeString("en-US", {
-        hour12: false,
-        hour: "2-digit",
-        minute: "2-digit",
-      }),
-      role: "user",
-      meta: {
-        saved: true,
-        savedBy: user.username,
-        originalId,
-        originalChannel: srcChannel || "(unknown)",
-        originalAt: item.originalAt || null,
-      },
-    };
-
-    messages[sid].push(msg);
-    if (messages[sid].length > 1000) messages[sid].shift();
-
-    // اگر الان داخل saved هست همزمان می‌بیند
-    io.to(sid).emit("receive_message", msg);
-
-    saveData();
-    socket.emit("action_success", "پیام ذخیره شد ✅");
-  });
-
-  // -------------------- Channel management --------------------
-  socket.on("create_channel", (channelName) => {
-    const user = users[socket.id];
-    if (!user || (user.role !== "admin" && user.role !== "vip")) return;
-
-    const clean = cleanChannelName(channelName);
-    if (!clean) return;
-
-    if (!channels.includes(clean)) channels.push(clean);
-    ensurePublicConversation(clean, user.username);
-
-    // creator gets access in restricted mode
-    if (appConfig.accessMode === "restricted")
-      addMember(clean, user.username, "owner");
-
-    // admin gets access always
-    if (appConfig.accessMode === "restricted")
-      addMember(clean, appConfig.adminUser, "owner");
-
-    io.emit("update_channels", channels);
-    saveData();
-
-    // push filtered channels to each user
-    io.sockets.sockets.forEach((s) => {
-      const u = users[s.id];
-      if (!u) return;
-      const list = listAccessibleChannels(u.username, u.role);
-      s.emit("channels_list", list);
-    });
-  });
-
-  socket.on("delete_channel", (channelName) => {
-    const user = users[socket.id];
-    if (!user || (user.role !== "admin" && user.role !== "vip")) return;
-
-    const clean = cleanChannelName(channelName);
-    if (!clean || clean === "General") return;
-
-    channels = channels.filter((c) => c !== clean);
-
-    delete conversations[clean];
-    delete memberships[clean];
-    delete messages[clean];
-
-    io.in(clean).socketsLeave(clean);
-
-    io.emit("update_channels", channels);
-    saveData();
-
-    io.sockets.sockets.forEach((s) => {
-      const u = users[s.id];
-      if (!u) return;
-      const list = listAccessibleChannels(u.username, u.role);
-      s.emit("channels_list", list);
-      // kick UI if user was in deleted channel
-      s.emit("channel_deleted", clean);
-    });
-  });
-
-  socket.on("update_admin_settings", (newSettings) => {
-    const user = users[socket.id];
-    if (!user || user.role !== "admin") return;
-
-    if (typeof newSettings?.hideUserList === "boolean") {
-      appConfig.hideUserList = newSettings.hideUserList;
-    }
-    if (
-      typeof newSettings?.accessMode === "string" &&
-      ["restricted", "open"].includes(newSettings.accessMode)
-    ) {
-      appConfig.accessMode = newSettings.accessMode;
-    }
-
-    atomicWriteJson(CONFIG_FILE, appConfig, 0o600);
-
-    // refresh channels list for everyone
-    io.sockets.sockets.forEach((s) => {
-      const u = users[s.id];
-      if (!u) return;
-      const list = listAccessibleChannels(u.username, u.role);
-      s.emit("channels_list", list);
-    });
-
-    broadcastUserList();
-    socket.emit("action_success", "تنظیمات با موفقیت ذخیره شد.");
-    emitAccessSnapshotToAdmin(socket);
-  });
-
-  // ✅ NEW: admin UI events to grant/revoke channel access
-  socket.on("admin_get_user_access", (targetUsername) => {
-    const actor = users[socket.id];
-    if (!actor || actor.role !== "admin") return;
-
-    const t = cleanUsername(targetUsername);
-    if (!t || !persistentUsers[t]) return;
-
-    const map = {};
-    for (const ch of channels) map[ch] = isMember(ch, t);
-
-    socket.emit("admin_user_access", { username: t, map, channels });
-  });
-
-  socket.on("admin_set_user_access", ({ targetUsername, channel, allow }) => {
-    const actor = users[socket.id];
-    if (!actor || actor.role !== "admin") return;
-
-    const t = cleanUsername(targetUsername);
-    const ch = cleanChannelName(channel);
-    const okAllow = !!allow;
-
-    if (!t || !persistentUsers[t]) return;
-    if (!ch || !channels.includes(ch)) return;
-
-    if (okAllow) addMember(ch, t, "member");
-    else removeMember(ch, t);
-
-    saveData();
-
-    // update target user's channels list live (if online)
-    const targetSocketIds = Object.keys(users).filter(
-      (id) => users[id]?.username === t,
-    );
-    for (const sid of targetSocketIds) {
-      const s = io.sockets.sockets.get(sid);
-      if (!s) continue;
-      const list = listAccessibleChannels(t, users[sid].role);
-      s.emit("channels_list", list);
-
-      // if they are currently inside revoked channel -> force leave
-      if (!okAllow) {
-        s.leave(ch);
-        s.emit("access_revoked", {
-          channel: ch,
-          message: "دسترسی شما به این کانال توسط ادمین برداشته شد.",
+      };
+
+      const autoResize = (e) => {
+        try {
+          e.target.style.height = "auto";
+          e.target.style.height = e.target.scrollHeight + "px";
+        } catch {}
+      };
+
+      // ---- auth ----
+      const login = () => {
+        if (!loginForm.value.username || !loginForm.value.password) {
+          error.value = "نام کاربری و رمز عبور الزامی است";
+          return;
+        }
+        error.value = "";
+        isAuthBusy.value = true;
+        socket.emit("login", loginForm.value);
+
+        try {
+          if ("Notification" in window) Notification.requestPermission();
+        } catch {}
+      };
+
+      const logout = () => {
+        try {
+          localStorage.removeItem("chat_user_name");
+        } catch {}
+        window.location.reload();
+      };
+
+      // ---- channels / views ----
+      const joinChannel = (ch) => {
+        if (!ch) return;
+        isSavedView.value = false;
+        isPrivateChat.value = false;
+        accessDeniedBanner.value = "";
+
+        socket.emit("join_channel", ch);
+        showSidebar.value = false;
+
+        unreadCounts.value[ch] = 0;
+      };
+
+      const startPrivateChat = (targetUsername) => {
+        isSavedView.value = false;
+
+        // reset view immediately
+        currentChannel.value = "";
+        messages.value = [];
+        isPrivateChat.value = true;
+        displayChannelName.value = targetUsername;
+        showSidebar.value = false;
+        searchResults.value = [];
+        searchQuery.value = "";
+        accessDeniedBanner.value = "";
+
+        unreadCounts.value[targetUsername] = 0;
+
+        socket.emit("join_private", targetUsername, (res) => {
+          if (!res || !res.ok) {
+            accessDeniedBanner.value =
+              "خطا در شروع پیام خصوصی: " + (res?.error || "NO_ACK");
+            return;
+          }
+          currentChannel.value = res.dmId;
         });
-      }
-    }
+      };
 
-    socket.emit(
-      "action_success",
-      `دسترسی ${okAllow ? "داده شد" : "برداشته شد"}: ${t} -> ${ch}`,
-    );
-    socket.emit("admin_user_access", {
-      username: t,
-      map: Object.fromEntries(channels.map((c) => [c, isMember(c, t)])),
-      channels,
-    });
-    emitAccessSnapshotToAdmin(socket);
-  });
+      const openSavedView = () => {
+        isSavedView.value = true;
+        isPrivateChat.value = true;
+        displayChannelName.value = "پیام‌های ذخیره‌شده";
+        showSidebar.value = false;
+        accessDeniedBanner.value = "";
 
-  // -------------------- Moderation --------------------
-  socket.on("ban_user", (targetUsername) => {
-    const actor = users[socket.id];
-    if (!actor || (actor.role !== "admin" && actor.role !== "vip")) return;
-    if (targetUsername === appConfig.adminUser) return;
+        socket.emit("join_saved");
+      };
 
-    const t = cleanUsername(targetUsername);
-    if (!persistentUsers[t]) return;
+      // ---- messaging ----
+      const sendMessage = () => {
+        if (!canSend.value) return;
 
-    persistentUsers[t].isBanned = true;
-
-    for (const key of Object.keys(messages)) {
-      if (Array.isArray(messages[key]))
-        messages[key] = messages[key].filter((m) => m.sender !== t);
-    }
-
-    saveData();
-    io.emit("bulk_delete_user", t);
-
-    const targetSockets = Object.keys(users).filter(
-      (id) => users[id].username === t,
-    );
-    targetSockets.forEach((id) => {
-      io.to(id).emit("force_disconnect", "شما توسط ادمین بن شدید.");
-      io.sockets.sockets.get(id)?.disconnect(true);
-      delete users[id];
-    });
-
-    broadcastUserList();
-    socket.emit("action_success", `کاربر ${t} بن شد و پیام‌های او حذف گردید.`);
-  });
-
-  socket.on("unban_user", (targetUsername) => {
-    const actor = users[socket.id];
-    if (!actor || (actor.role !== "admin" && actor.role !== "vip")) return;
-
-    const t = cleanUsername(targetUsername);
-    if (persistentUsers[t]) {
-      persistentUsers[t].isBanned = false;
-      saveData();
-      socket.emit("action_success", `کاربر ${t} آزاد شد.`);
-      socket.emit("banned_list", getBannedUsers());
-    }
-  });
-
-  socket.on("get_banned_users", () => {
-    const actor = users[socket.id];
-    if (!actor || (actor.role !== "admin" && actor.role !== "vip")) return;
-    socket.emit("banned_list", getBannedUsers());
-  });
-
-  socket.on("set_role", ({ targetUsername, role }) => {
-    const actor = users[socket.id];
-    if (!actor || actor.role !== "admin") return;
-    if (targetUsername === appConfig.adminUser) return;
-
-    const t = cleanUsername(targetUsername);
-    if (persistentUsers[t] && ["user", "vip"].includes(role)) {
-      persistentUsers[t].role = role;
-      saveData();
-
-      const targetSocketId = Object.keys(users).find(
-        (id) => users[id].username === t,
-      );
-      if (targetSocketId) {
-        users[targetSocketId].role = role;
-        io.to(targetSocketId).emit("role_update", role);
-
-        // refresh channels list as role might affect (admin only in our model)
-        const s = io.sockets.sockets.get(targetSocketId);
-        if (s) s.emit("channels_list", listAccessibleChannels(t, role));
-      }
-
-      broadcastUserList();
-      socket.emit("action_success", `نقش کاربر ${t} به ${role} تغییر کرد.`);
-    }
-  });
-
-  // -------------------- Messaging (with access enforcement) --------------------
-  socket.on("send_message", (data) => {
-    const user = users[socket.id];
-    if (!user) return;
-
-    // rate limit
-    const now = Date.now();
-    if (!userRateLimits[user.username])
-      userRateLimits[user.username] = { count: 0, last: now };
-    if (now - userRateLimits[user.username].last > 5000)
-      userRateLimits[user.username] = { count: 0, last: now };
-    if (userRateLimits[user.username].count > 5)
-      return socket.emit("error", "لطفا آهسته‌تر پیام ارسال کنید.");
-    userRateLimits[user.username].count++;
-
-    const conversationId = String(data?.conversationId || "").trim();
-    if (!conversationId) return;
-
-    // ✅ Saved Chat
-    if (isSavedConvId(conversationId)) {
-      const expected = savedConvIdFor(user.username);
-      if (conversationId !== expected) {
-        return socket.emit("access_denied", {
-          channel: conversationId,
-          message: "دسترسی به Saved دیگران مجاز نیست.",
+        socket.emit("send_message", {
+          text: messageText.value,
+          type: "text",
+          channel: currentChannel.value,
+          conversationId: currentChannel.value,
+          replyTo: replyingTo.value,
         });
-      }
-      ensureConversationMaps(conversationId);
-    }
-    // ✅ DM
-    else if (conversationId.includes("_pv_")) {
-      if (!isValidDMId(conversationId))
-        return socket.emit("error", "گفتگوی خصوصی نامعتبر است.");
-      if (!canAccessDM(user, conversationId)) {
-        return socket.emit("access_denied", {
-          channel: conversationId,
-          message: "شما به این گفتگوی خصوصی دسترسی ندارید.",
+
+        messageText.value = "";
+        replyingTo.value = null;
+        scrollToBottom(true);
+      };
+
+      const handleComposerKeydown = (e) => {
+        if (e.key !== "Enter") return;
+        if (e.shiftKey) return;
+        e.preventDefault();
+        if (!canSend.value) return;
+        sendMessage();
+      };
+
+      // reply helpers
+      const setReply = (msg) => {
+        replyingTo.value = msg;
+        nextTick(() => {
+          try {
+            document.querySelector("textarea")?.focus();
+          } catch {}
         });
-      }
-      if (!conversations[conversationId]) {
-        const p = dmParticipants(conversationId);
-        if (!p) return socket.emit("error", "گفتگوی خصوصی نامعتبر است.");
-        getOrCreateDMConversation(p.a, p.b);
-      }
-    }
-    // ✅ Public channel
-    else {
-      const cleanConv = cleanChannelName(conversationId);
-      if (!channels.includes(cleanConv))
-        return socket.emit("error", "کانال وجود ندارد.");
-      if (!canAccessChannel(user.username, user.role, cleanConv)) {
-        return socket.emit("access_denied", {
-          channel: cleanConv,
-          message: "شما به این کانال دسترسی ندارید.",
+      };
+      const cancelReply = () => {
+        replyingTo.value = null;
+      };
+
+      // save message
+      const saveThisMessage = (msg) => {
+        if (!msg) return;
+        socket.emit("save_message", {
+          originalId: msg.id,
+          from: msg.sender,
+          channel: msg.channel || msg.conversationId,
+          type: msg.type,
+          text: msg.text,
+          content: msg.content,
+          fileName: msg.fileName,
+          originalAt: msg.timestamp || null,
         });
-      }
-      if (!conversations[cleanConv])
-        ensurePublicConversation(cleanConv, "system");
-    }
+      };
 
-    // content sanitization
-    const cleanTextVal = cleanText(data?.text, 1000);
-    const cleanFileName = data?.fileName
-      ? xss(String(data.fileName)).substring(0, 120)
-      : undefined;
-    const type = String(data?.type || "text");
+      const unsave = (id) => {
+        if (!id) return;
+        socket.emit("saved_delete", id);
+      };
 
-    // ✅ validate content to prevent javascript:/phishing
-    let content = typeof data?.content === "string" ? data.content : undefined;
+      // ---- upload ----
+      const handleFileUpload = (e) => {
+        const file = e?.target?.files?.[0];
+        if (!file) return;
 
-    function isSafeUploadsUrl(u) {
-      if (!u || typeof u !== "string") return false;
-      // allow: /uploads/<file> or /uploads/<file>?t=...
-      if (u.startsWith("/uploads/")) return true;
-      return false;
-    }
+        const maxMB = Number(appSettings.value?.maxFileSizeMB || 50);
+        if (file.size > maxMB * 1024 * 1024) {
+          alert("حجم فایل بیشتر از حد مجاز است (" + maxMB + "MB)");
+          e.target.value = "";
+          return;
+        }
 
-    function isSafeDataUrl(u, kind) {
-      if (!u || typeof u !== "string") return false;
-      // allow only audio recording data url (your recorder uses audio/webm)
-      if (kind === "audio") return u.startsWith("data:audio/");
-      // disallow data:image/video/file from users (you use uploads for those)
-      return false;
-    }
+        const formData = new FormData();
+        formData.append("file", file);
 
-    if (type !== "text") {
-      if (!content) return socket.emit("error", "محتوای پیام نامعتبر است.");
-      const ok = isSafeUploadsUrl(content) || isSafeDataUrl(content, type);
+        isUploading.value = true;
+        uploadProgress.value = 0;
 
-      if (!ok) return socket.emit("error", "لینک/محتوا مجاز نیست.");
-    }
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", "/upload", true);
+        if (uploadToken.value)
+          xhr.setRequestHeader("X-Upload-Token", uploadToken.value);
 
-    if (
-      type === "audio" &&
-      typeof content === "string" &&
-      content.length > 2_500_000
-    )
-      return socket.emit("error", "فایل صوتی خیلی بزرگ است.");
-    if (
-      type === "image" &&
-      typeof content === "string" &&
-      content.length > 3_500_000
-    )
-      return socket.emit("error", "تصویر خیلی بزرگ است.");
-    if (
-      type === "video" &&
-      typeof content === "string" &&
-      content.length > 5_000_000
-    )
-      return socket.emit("error", "ویدیو خیلی بزرگ است.");
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) {
+            uploadProgress.value = Math.round(
+              (event.loaded / event.total) * 100,
+            );
+          }
+        };
 
-    const msg = {
-      id: crypto.randomBytes(12).toString("hex"),
-      sender: user.username,
-      text: cleanTextVal,
-      type,
-      content,
-      fileName: cleanFileName,
-      conversationId,
-      channel: conversationId,
-      replyTo: data?.replyTo || null,
-      timestamp: new Date().toLocaleTimeString("en-US", {
-        hour12: false,
-        hour: "2-digit",
-        minute: "2-digit",
-      }),
-      role: user.role,
-    };
+        xhr.onload = () => {
+          try {
+            if (xhr.status === 200) {
+              const res = JSON.parse(xhr.responseText);
 
-    ensureConversationMaps(conversationId);
-    messages[conversationId].push(msg);
-    if (messages[conversationId].length > 100) messages[conversationId].shift();
+              let type = "file";
+              if (String(res.mimetype || "").startsWith("image/"))
+                type = "image";
+              else if (String(res.mimetype || "").startsWith("video/"))
+                type = "video";
+              else if (String(res.mimetype || "").startsWith("audio/"))
+                type = "audio";
 
-    io.to(conversationId).emit("receive_message", msg);
-    saveData();
-  });
+              const securedUrl = uploadToken.value
+                ? res.url + "?t=" + encodeURIComponent(uploadToken.value)
+                : res.url;
 
-  socket.on("delete_message", (msgId) => {
-    const user = users[socket.id];
-    if (!user || user.role !== "admin") return;
+              socket.emit("send_message", {
+                text: "",
+                type,
+                content: securedUrl,
+                fileName: res.filename,
+                channel: currentChannel.value,
+                conversationId: currentChannel.value,
+                replyTo: replyingTo.value,
+              });
 
-    const id = String(msgId || "");
-    if (!id) return;
+              replyingTo.value = null;
+              scrollToBottom(true);
+            } else {
+              alert("Upload Failed: Server Error");
+            }
+          } catch (err) {
+            console.error(err);
+            alert("Upload Failed: Invalid response");
+          } finally {
+            isUploading.value = false;
+            try {
+              if (fileInput.value) fileInput.value.value = "";
+            } catch {}
+          }
+        };
 
-    let found = false;
-    for (const key of Object.keys(messages)) {
-      if (!Array.isArray(messages[key])) continue;
-      const idx = messages[key].findIndex((m) => m.id === id);
-      if (idx !== -1) {
-        messages[key].splice(idx, 1);
-        found = true;
-        io.to(key).emit("message_deleted", { channel: key, id });
-        break;
-      }
-    }
-    if (found) saveData();
-  });
+        xhr.onerror = () => {
+          isUploading.value = false;
+          alert("Upload Network Error");
+          try {
+            if (fileInput.value) fileInput.value.value = "";
+          } catch {}
+        };
 
-  socket.on("search_user", (query) => {
-    if (!users[socket.id]) return;
-    if (!query || String(query).length > 20) return;
+        xhr.send(formData);
+      };
 
-    const cleanQuery = xss(String(query)).toLowerCase();
-    const matches = Object.keys(persistentUsers)
-      .filter((u) => u.toLowerCase().includes(cleanQuery))
-      .slice(0, 30);
-    socket.emit("search_results", matches);
-  });
+      // ---- audio recording ----
+      const toggleRecording = async () => {
+        if (isRecording.value) {
+          try {
+            mediaRecorder?.stop();
+          } catch {}
+          isRecording.value = false;
+          return;
+        }
 
-  socket.on("disconnect", () => {
-    delete users[socket.id];
-    broadcastUserList();
-  });
-});
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+          });
+          mediaRecorder = new MediaRecorder(stream);
+          audioChunks = [];
 
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+          mediaRecorder.ondataavailable = (event) =>
+            audioChunks.push(event.data);
+
+          mediaRecorder.onstop = () => {
+            try {
+              const audioBlob = new Blob(audioChunks, { type: "audio/webm" });
+              const reader = new FileReader();
+              reader.readAsDataURL(audioBlob);
+              reader.onloadend = () => {
+                socket.emit("send_message", {
+                  text: "",
+                  type: "audio",
+                  content: reader.result,
+                  channel: currentChannel.value,
+                  conversationId: currentChannel.value,
+                  replyTo: replyingTo.value,
+                });
+                replyingTo.value = null;
+              };
+            } catch (e) {
+              console.error(e);
+            }
+          };
+
+          mediaRecorder.start();
+          isRecording.value = true;
+        } catch (e) {
+          alert("Microphone access denied");
+        }
+      };
+
+      // ---- admin actions ----
+      const deleteMessage = (msgId) => {
+        if (!msgId) return;
+        if (confirm("آیا مطمئن هستید؟")) socket.emit("delete_message", msgId);
+      };
+
+      const toggleCreateChannel = () => {
+        showCreateChannelInput.value = !showCreateChannelInput.value;
+      };
+
+      const createChannel = () => {
+        if (!newChannelName.value) return;
+        socket.emit("create_channel", newChannelName.value);
+        newChannelName.value = "";
+        showCreateChannelInput.value = false;
+      };
+
+      const deleteChannel = (ch) => {
+        if (!ch) return;
+        if (confirm("حذف کانال؟")) socket.emit("delete_channel", ch);
+      };
+
+      const banUser = (target) => {
+        if (!target) return;
+        if (confirm("بن کردن کاربر " + target + " و حذف پیام‌ها؟"))
+          socket.emit("ban_user", target);
+      };
+
+      const unbanUser = (target) => {
+        if (!target) return;
+        socket.emit("unban_user", target);
+      };
+
+      const setRole = (target, role) => {
+        if (!target || !role) return;
+        socket.emit("set_role", { targetUsername: target, role });
+      };
+
+      const openBanList = () => {
+        socket.emit("get_banned_users");
+        showBanModal.value = true;
+      };
+
+      const saveAdminSettings = () => {
+        socket.emit("update_admin_settings", adminSettings.value);
+        showAdminSettings.value = false;
+      };
+
+      // ---- Access modal (admin) ----
+      const openAccessModal = (targetUsername) => {
+        accessModalUser.value = targetUsername;
+        showAccessModal.value = true;
+        accessChannels.value = [];
+        accessMap.value = {};
+        socket.emit("admin_get_user_access", targetUsername);
+      };
+
+      const refreshAccessModal = () => {
+        if (!accessModalUser.value) return;
+        socket.emit("admin_get_user_access", accessModalUser.value);
+      };
+
+      const toggleUserAccess = (channel, allow) => {
+        if (!accessModalUser.value) return;
+        socket.emit("admin_set_user_access", {
+          targetUsername: accessModalUser.value,
+          channel,
+          allow,
+        });
+      };
+
+      // ---- search ----
+      const searchUser = () => {
+        if (searchQuery.value.length > 2)
+          socket.emit("search_user", searchQuery.value);
+        else searchResults.value = [];
+      };
+
+      // ---- user click / context ----
+      const handleUserClick = (u) => {
+        if (!u || !u.username) return;
+        if (u.username !== user.value.username) startPrivateChat(u.username);
+      };
+
+      const showContext = (e, msg) => {
+        contextMenu.value = {
+          visible: true,
+          x: e.pageX,
+          y: e.pageY,
+          target: msg,
+          type: "message",
+        };
+      };
+
+      const showUserContext = (e, targetUsername) => {
+        contextMenu.value = {
+          visible: true,
+          x: e.pageX,
+          y: e.pageY,
+          target: targetUsername,
+          type: "user",
+        };
+      };
+
+      // ---- swipe reply ----
+      const touchStart = (e, msg) => {
+        swipeStartX.value = e.touches[0].clientX;
+        swipeId.value = msg.id;
+        swipeOffset.value = 0;
+      };
+
+      const touchMove = (e) => {
+        if (!swipeId.value) return;
+        const diff = e.touches[0].clientX - swipeStartX.value;
+        if (diff < 0 && diff > -100) swipeOffset.value = diff;
+      };
+
+      const touchEnd = () => {
+        if (swipeOffset.value < -50) {
+          const msg = messages.value.find((m) => m.id === swipeId.value);
+          if (msg) setReply(msg);
+        }
+        swipeId.value = null;
+        swipeOffset.value = 0;
+      };
+
+      const getSwipeStyle = (id) => {
+        return swipeId.value === id
+          ? { transform: `translateX(${swipeOffset.value}px)` }
+          : {};
+      };
+
+      // ---- image lightbox ----
+      const viewImage = (src) => {
+        lightboxImage.value = src;
+      };
+
+      // ---- socket events ----
+      socket.on("connect", () => {
+        isConnected.value = true;
+      });
+
+      socket.on("disconnect", () => {
+        isConnected.value = false;
+      });
+
+      socket.on("login_success", (data) => {
+        isLoggedIn.value = true;
+        user.value = { username: data.username, role: data.role };
+
+        channels.value = Array.isArray(data.channels) ? data.channels : [];
+        uploadToken.value = data.uploadToken || "";
+
+        if (data.settings) {
+          appSettings.value = data.settings;
+
+          if (data.settings.appName) {
+            appName.value = data.settings.appName;
+            document.title = data.settings.appName;
+          }
+
+          if (typeof data.settings.hideUserList === "boolean")
+            adminSettings.value.hideUserList = data.settings.hideUserList;
+          if (typeof data.settings.accessMode === "string")
+            adminSettings.value.accessMode = data.settings.accessMode;
+        }
+
+        try {
+          localStorage.setItem("chat_user_name", data.username);
+        } catch {}
+
+        isAuthBusy.value = false;
+
+        // if no channels
+        if (channels.value.length === 0) {
+          currentChannel.value = "";
+          displayChannelName.value = "بدون دسترسی";
+          messages.value = [];
+        }
+      });
+
+      socket.on("login_error", (msg) => {
+        error.value = msg;
+        isAuthBusy.value = false;
+      });
+
+      socket.on("force_disconnect", (msg) => {
+        alert(msg);
+        window.location.reload();
+      });
+
+      socket.on("channel_joined", (data) => {
+        currentChannel.value = data.name;
+
+        const saved = !!(data && data.isSaved);
+        isSavedView.value = saved;
+
+        isPrivateChat.value = !!data.isPrivate;
+
+        if (saved) {
+          displayChannelName.value = "پیام‌های ذخیره‌شده";
+          return;
+        }
+
+        if (data.isPrivate) {
+          const parts = String(data.name || "").split("_pv_");
+          displayChannelName.value =
+            parts.find((u) => u !== user.value.username) || "Private";
+        } else {
+          displayChannelName.value = data.name;
+        }
+      });
+
+      socket.on("history", (msgs) => {
+        messages.value = Array.isArray(msgs) ? msgs : [];
+        scrollToBottom(true);
+      });
+
+      socket.on("receive_message", (msg) => {
+        if (!msg) return;
+
+        if (msg.channel === currentChannel.value) {
+          const c = document.getElementById("messages-container");
+          const isNearBottom = c
+            ? c.scrollTop + c.clientHeight >= c.scrollHeight - 150
+            : true;
+
+          messages.value.push(msg);
+
+          if (msg.sender === user.value.username || isNearBottom)
+            scrollToBottom();
+
+          if (document.hidden && msg.sender !== user.value.username) {
+            notify(
+              `پیام جدید در ${displayChannelName.value}`,
+              `${msg.sender}: ${msg.text || "مدیا"}`,
+            );
+          }
+        } else {
+          // Unread logic
+          if (String(msg.channel || "").includes("_pv_")) {
+            const parts = String(msg.channel).split("_pv_");
+            const partner = parts.find((p) => p !== user.value.username);
+            if (partner) {
+              unreadCounts.value[partner] =
+                (unreadCounts.value[partner] || 0) + 1;
+              notify(`پیام خصوصی از ${partner}`, msg.text || "فایل ارسال شد");
+            }
+          } else {
+            unreadCounts.value[msg.channel] =
+              (unreadCounts.value[msg.channel] || 0) + 1;
+          }
+        }
+      });
+
+      socket.on("message_deleted", (data) => {
+        if (data && data.channel === currentChannel.value) {
+          messages.value = messages.value.filter((m) => m.id !== data.id);
+        }
+      });
+
+      socket.on("bulk_delete_user", (targetUser) => {
+        messages.value = messages.value.filter((m) => m.sender !== targetUser);
+      });
+
+      socket.on("user_list", (list) => {
+        onlineUsers.value = Array.isArray(list) ? list : [];
+      });
+
+      // admin-only broadcast; per-user list is channels_list
+      socket.on("update_channels", (_list) => {});
+
+      socket.on("channels_list", (list) => {
+        channels.value = Array.isArray(list) ? list : [];
+
+        // if current channel revoked/deleted (only for public)
+        if (
+          currentChannel.value &&
+          !isPrivateChat.value &&
+          !isSavedView.value
+        ) {
+          if (!channels.value.includes(currentChannel.value)) {
+            messages.value = [];
+            currentChannel.value = "";
+            displayChannelName.value = "بدون دسترسی";
+          }
+        }
+      });
+
+      socket.on("channel_deleted", (ch) => {
+        if (currentChannel.value === ch) {
+          messages.value = [];
+          currentChannel.value = "";
+          displayChannelName.value = "کانال حذف شد";
+        }
+      });
+
+      socket.on("access_denied", (data) => {
+        accessDeniedBanner.value = data?.message
+          ? data.message
+          : "دسترسی ندارید.";
+      });
+
+      socket.on("access_revoked", (data) => {
+        accessDeniedBanner.value = data?.message
+          ? data.message
+          : "دسترسی شما برداشته شد.";
+        if (currentChannel.value === data?.channel) {
+          messages.value = [];
+          currentChannel.value = "";
+          displayChannelName.value = "بدون دسترسی";
+        }
+      });
+
+      socket.on("banned_list", (list) => {
+        bannedUsers.value = Array.isArray(list) ? list : [];
+      });
+
+      socket.on("action_success", (msg) => {
+        try {
+          alert(msg);
+        } catch {}
+      });
+
+      socket.on("role_update", (newRole) => {
+        user.value.role = newRole;
+        alert("نقش شما تغییر کرد: " + newRole);
+      });
+
+      socket.on("admin_user_access", (payload) => {
+        if (!payload) return;
+        if (payload.username !== accessModalUser.value) return;
+        accessChannels.value = Array.isArray(payload.channels)
+          ? payload.channels
+          : [];
+        accessMap.value =
+          payload.map && typeof payload.map === "object" ? payload.map : {};
+      });
+
+      // ---- lifecycle ----
+      onMounted(() => {
+        // restore username for login form
+        try {
+          const storedUser = localStorage.getItem("chat_user_name");
+          if (storedUser) loginForm.value.username = storedUser;
+        } catch {}
+
+        // hide context menu on click anywhere
+        document.addEventListener("click", () => {
+          contextMenu.value.visible = false;
+        });
+
+        // notifications permission
+        try {
+          if (
+            "Notification" in window &&
+            Notification.permission !== "granted" &&
+            Notification.permission !== "denied"
+          ) {
+            Notification.requestPermission();
+          }
+        } catch {}
+
+        // scroll listener for showScrollDown
+        const c = document.getElementById("messages-container");
+        if (c) {
+          c.addEventListener(
+            "scroll",
+            () => {
+              const isNearBottom =
+                c.scrollTop + c.clientHeight >= c.scrollHeight - 150;
+              showScrollDown.value = !isNearBottom;
+            },
+            { passive: true },
+          );
+        }
+      });
+
+      // ---- expose to template ----
+      return {
+        // core
+        isLoggedIn,
+        user,
+        loginForm,
+        error,
+        login,
+        logout,
+
+        // channels / views
+        channels,
+        currentChannel,
+        joinChannel,
+        displayChannelName,
+        isPrivateChat,
+        isSavedView,
+
+        // messages
+        messages,
+        msgContainer,
+
+        // composer
+        messageText,
+        sendMessage,
+        canSend,
+        handleComposerKeydown,
+        autoResize,
+
+        // upload
+        handleFileUpload,
+        fileInput,
+        isUploading,
+        uploadProgress,
+        uploadToken,
+
+        // users / search
+        onlineUsers,
+        sortedUsers,
+        searchUser,
+        searchQuery,
+        searchResults,
+        startPrivateChat,
+        handleUserClick,
+
+        // sidebar / channel create
+        showSidebar,
+        toggleCreateChannel,
+        showCreateChannelInput,
+        newChannelName,
+        createChannel,
+        deleteChannel,
+
+        // reply
+        replyingTo,
+        setReply,
+        cancelReply,
+
+        // admin / moderation
+        deleteMessage,
+        canCreateChannel,
+        canBan,
+        banUser,
+        unbanUser,
+        setRole,
+        showBanModal,
+        openBanList,
+        bannedUsers,
+
+        // context menu
+        contextMenu,
+        showContext,
+        showUserContext,
+        saveThisMessage,
+
+        // swipe reply
+        swipeId,
+        touchStart,
+        touchMove,
+        touchEnd,
+        getSwipeStyle,
+
+        // audio
+        isRecording,
+        toggleRecording,
+
+        // lightbox
+        viewImage,
+        lightboxImage,
+
+        // ui / misc
+        unreadCounts,
+        appName,
+        showAdminSettings,
+        adminSettings,
+        saveAdminSettings,
+        isConnected,
+        isAuthBusy,
+        showScrollDown,
+        scrollToBottom,
+        scrollToMessage,
+
+        // saved
+        openSavedView,
+        unsave,
+
+        // access UI
+        showAccessModal,
+        accessModalUser,
+        accessChannels,
+        accessMap,
+        openAccessModal,
+        toggleUserAccess,
+        refreshAccessModal,
+        accessDeniedBanner,
+
+        // safe
+        safeLink,
+      };
+    },
+  }).mount("#app");
+})();

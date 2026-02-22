@@ -9,7 +9,7 @@ cleanup() { true; }
 trap cleanup EXIT
 
 # ---- Installer metadata ----
-INSTALLER_VERSION="1.1.1"
+INSTALLER_VERSION="1.1.3"
 INSTALLER_BUILD_DATE="2026-02-22"
 
 DIR_DEFAULT="$HOME/chat-node-socketio-chatroom"
