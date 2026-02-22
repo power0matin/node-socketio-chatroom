@@ -2841,7 +2841,6 @@ update_via_git_clone() {
 
   local tmp
   tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp" >/dev/null 2>&1 || true' RETURN
 
   echo "[1/5] Cloning latest code into temp..."
   git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$tmp/repo" >/dev/null 2>&1 || {
@@ -2854,10 +2853,13 @@ update_via_git_clone() {
   rsync -a --delete \
     --exclude ".git/" \
     --exclude "data/" \
-    --exclude "public/uploads/" \
+    --filter='P public/uploads/' \
+    --exclude "public/uploads/***" \
     --exclude "node_modules/" \
     "$tmp/repo/" "$DIR/"
 
+  rm -rf "$tmp" >/dev/null 2>&1 || true
+  
   echo "Code synced."
 }
 
@@ -2887,7 +2889,8 @@ update_via_zip() {
   echo "[2/5] Syncing code (preserving database/uploads/config)..."
   rsync -a --delete \
     --exclude "data/" \
-    --exclude "public/uploads/" \
+    --filter='P public/uploads/' \
+    --exclude "public/uploads/***" \
     --exclude "node_modules/" \
     "$extracted/" "$DIR/"
 
