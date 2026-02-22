@@ -33,7 +33,12 @@
 
   <!-- libs (only once) -->
   <script src="/socket.io/socket.io.js"></script>
-  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <script type="module">
+    import { createApp, ref, computed, onMounted, nextTick } from "https://unpkg.com/vue@3/dist/vue.esm-browser.js";
+    import { initApp } from "/assets/app.js";
+
+    initApp({ createApp, ref, computed, onMounted, nextTick });
+  </script>
 </head>
 
 <body class="w-full overflow-hidden flex flex-col dir-rtl">
