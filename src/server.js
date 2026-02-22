@@ -255,7 +255,10 @@ const corsOption = (() => {
 
   return {
     origin: (origin, cb) => {
+      // allow no-origin for same-host / server-side tools
       if (!origin) return cb(null, true);
+
+      // strict allow-list
       return origins.includes(origin) ? cb(null, true) : cb(null, false);
     },
     methods: ["GET", "POST"],
@@ -263,7 +266,8 @@ const corsOption = (() => {
 })();
 
 const io = new Server(server, {
-  maxHttpBufferSize: 1e8,
+  // keep socket payload small; files go via /upload
+  maxHttpBufferSize: 2e6, // ~2MB
   cors: corsOption,
 });
 
@@ -559,10 +563,17 @@ app.use("/uploads", (req, res, next) => {
   next();
 });
 
+// ✅ Serve uploads
+app.use("/uploads", express.static(UPLOADS_DIR));
+
 // Serve uploads from the correct folder at project root
 app.use("/uploads", express.static(UPLOADS_DIR));
 
 app.use(express.static(PUBLIC_DIR));
+
+app.get("/", (_req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, "index.html"));
+});
 
 app.post("/upload", uploadLimiter, (req, res) => {
   const tok = String(req.headers["x-upload-token"] || "");
