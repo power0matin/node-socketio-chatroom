@@ -151,6 +151,13 @@ It will:
 - start the server via PM2
 - install a management CLI command: `node-socketio-chatroom`
 
+✅ **Client is already modularized**:
+
+- UI: `public/index.html`
+- Client JS: `public/assets/app.js`
+- Styles: `public/assets/app.css`
+- Theme vars: `public/assets/theme.css`
+
 ### Requirements
 
 - Ubuntu/Debian VPS
@@ -175,8 +182,17 @@ At the end, you will get:
 - URL: `http://<server-ip>:<port>`
 - CLI command: `node-socketio-chatroom`
 
+### Manual Run (Dev / without installer)
+
+```bash
+npm install
+node server.js
+# open: http://localhost:3000
+```
+
 ### Notes
 
+- `public/index.html` loads the client from `/assets/app.js`. Do **not** paste Vue/socket code inside `index.html` anymore.
 - If you use a reverse proxy (Nginx), set `allowedOrigins` to your domain (recommended).
 - If you change settings using the CLI, it restarts the PM2 process automatically.
 

@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# node-socketio-chatroom - Interactive Installer (Repo-based, modular-client compatible)
-# Target folder: ~/chat-node-socketio-chatroom
-
+# node-socketio-chatroom - Interactive Installer (Repo-based, modular-client compatible, optimized)
 cleanup() { true; }
 trap cleanup EXIT
 
@@ -12,6 +10,26 @@ APP_NAME_DEFAULT="node-socketio-chatroom"
 
 REPO_URL_DEFAULT="https://github.com/power0matin/node-socketio-chatroom.git"
 BRANCH_DEFAULT="main"
+
+need_apt_update=0
+
+have_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+apt_install_if_missing() {
+  local pkg="$1"
+  local cmd="${2:-$1}"
+  if ! have_cmd "$cmd"; then
+    need_apt_update=1
+    sudo apt-get install -y "$pkg"
+  fi
+}
+
+apt_update_if_needed() {
+  if [[ "$need_apt_update" -eq 1 ]]; then
+    sudo apt-get update -y
+    need_apt_update=0
+  fi
+}
 
 echo "========================================"
 echo "    node-socketio-chatroom Installer"
@@ -27,7 +45,6 @@ APP_NAME_VAL="${INPUT_APP_NAME:-$APP_NAME_DEFAULT}"
 read -r -p "Admin Username [default: admin]: " INPUT_USER
 ADMIN_USER="${INPUT_USER:-admin}"
 
-# Admin Password (secure): no weak default, hidden input. If empty => generate strong random.
 prompt_password() {
   local pass1 pass2
   while true; do
@@ -91,52 +108,52 @@ case "${COLOR_CHOICE:-1}" in
 esac
 
 echo ""
-echo "[1/7] Installing Node.js & PM2..."
+echo "[1/7] Checking system deps..."
 
-# Install Node.js (NodeSource)
-if ! command -v node >/dev/null 2>&1; then
+# Ensure base deps exist BEFORE NodeSource usage
+need_apt_update=1
+apt_update_if_needed
+apt_install_if_missing ca-certificates update-ca-certificates
+apt_install_if_missing curl curl
+apt_install_if_missing git git
+apt_install_if_missing rsync rsync
+
+echo "[2/7] Installing Node.js 20 & npm if missing..."
+
+if ! have_cmd node; then
   curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
   sudo apt-get install -y nodejs
 fi
 
-# Find npm
-NPM_BIN=""
-for p in /usr/bin/npm /usr/local/bin/npm /bin/npm; do
-  if [[ -x "$p" ]]; then NPM_BIN="$p"; break; fi
-done
-if [[ -z "$NPM_BIN" ]]; then
-  NPM_BIN="$(command -v npm 2>/dev/null || true)"
-fi
-if [[ -z "$NPM_BIN" ]]; then
-  sudo apt-get update -y
+# npm should come with nodejs on NodeSource; fallback if not
+if ! have_cmd npm; then
   sudo apt-get install -y npm
-  NPM_BIN="$(command -v npm 2>/dev/null || true)"
-fi
-if [[ -z "$NPM_BIN" ]]; then
-  echo "ERROR: npm not found."
-  exit 1
 fi
 
-sudo "$NPM_BIN" install -g pm2
+# Install pm2 only if missing
+if ! have_cmd pm2; then
+  sudo npm install -g pm2
+fi
 
 node -v
-"$NPM_BIN" -v
+npm -v
 pm2 -v
-
-echo "[2/7] Installing system deps (git/rsync/curl)..."
-sudo apt-get update -y
-sudo apt-get install -y git rsync curl
 
 echo "[3/7] Fetching project into: $DIR"
 mkdir -p "$DIR"
 
-# If directory already has a repo, update it; otherwise clone fresh
+# If directory has .git => update. If directory not empty and no .git => fail fast.
 if [[ -d "$DIR/.git" ]]; then
   echo "Existing git repo detected. Updating..."
   git -C "$DIR" fetch --all --prune
   git -C "$DIR" checkout "$BRANCH_DEFAULT"
   git -C "$DIR" pull --ff-only origin "$BRANCH_DEFAULT"
 else
+  if [[ -n "$(ls -A "$DIR" 2>/dev/null || true)" ]]; then
+    echo "ERROR: Install directory is not empty and is not a git repo: $DIR"
+    echo "Choose an empty directory or remove its contents."
+    exit 1
+  fi
   echo "Cloning from $REPO_URL_DEFAULT ..."
   git clone --depth 1 --branch "$BRANCH_DEFAULT" "$REPO_URL_DEFAULT" "$DIR"
 fi
@@ -147,7 +164,6 @@ echo "[4/7] Ensuring required directories exist..."
 mkdir -p "$DIR/data" "$DIR/public/uploads"
 chmod 700 "$DIR/data" "$DIR/public/uploads"
 
-# Sanity check required files
 REQ_FILES=(
   "$DIR/server.js"
   "$DIR/public/index.html"
@@ -155,28 +171,32 @@ REQ_FILES=(
   "$DIR/public/assets/app.css"
   "$DIR/public/assets/theme.css"
   "$DIR/menu.sh"
+  "$DIR/package.json"
 )
 for f in "${REQ_FILES[@]}"; do
   if [[ ! -f "$f" ]]; then
     echo "ERROR: Missing required file: $f"
-    echo "Make sure your repo contains the paths you listed."
     exit 1
   fi
 done
 
 echo "[5/7] Applying configuration (placeholders)..."
-# Replace placeholders if they exist
 sed -i "s|__APP_NAME_PLACEHOLDER__|$APP_NAME_VAL|g" "$DIR/public/index.html" || true
-
-# Theme variables are in theme.css now
 sed -i "s|__COLOR_DEFAULT__|$C_DEF|g" "$DIR/public/assets/theme.css" || true
 sed -i "s|__COLOR_DARK__|$C_DARK|g" "$DIR/public/assets/theme.css" || true
 sed -i "s|__COLOR_LIGHT__|$C_LIGHT|g" "$DIR/public/assets/theme.css" || true
 
-echo "[6/7] Installing npm dependencies..."
-"$NPM_BIN" install
+echo "[6/7] Installing npm dependencies (optimized)..."
+# speed: disable audit/fund during install
+npm config set fund false >/dev/null 2>&1 || true
+npm config set audit false >/dev/null 2>&1 || true
 
-# --- Create config with adminPassHash (no plaintext) ---
+if [[ -f package-lock.json ]]; then
+  npm ci --omit=dev
+else
+  npm install --omit=dev
+fi
+
 ADMIN_PASS_HASH="$(
   ADMIN_PASS="$ADMIN_PASS" node - <<'NODE'
 const bcrypt = require('bcryptjs');
@@ -190,9 +210,8 @@ if [[ -z "${ADMIN_PASS_HASH}" ]]; then
   exit 1
 fi
 
-# --- Data-at-rest encryption key (AES-256-GCM) ---
 DATA_ENC_KEY=""
-if command -v openssl >/dev/null 2>&1; then
+if have_cmd openssl; then
   DATA_ENC_KEY="$(openssl rand -hex 32)"
 else
   DATA_ENC_KEY="$(LC_ALL=C tr -dc 'a-f0-9' </dev/urandom | head -c 64)"
@@ -216,7 +235,6 @@ cat > "$DIR/data/config.json" <<EOF
 }
 EOF
 chmod 600 "$DIR/data/config.json"
-
 unset ADMIN_PASS
 
 echo "[7/7] Starting server with PM2..."
@@ -226,15 +244,10 @@ PORT="$PORT" pm2 start "$DIR/server.js" --name "$PM2_NAME"
 pm2 save
 
 echo "Installing management tool from repo menu.sh ..."
-# Install menu.sh as a command (and inject placeholders)
 TMP_MENU="$(mktemp)"
 cp "$DIR/menu.sh" "$TMP_MENU"
-
-# Expected placeholders inside menu.sh:
-#   __DIR__ , __PM2_NAME__
 sed -i "s|__DIR__|$DIR|g" "$TMP_MENU"
 sed -i "s|__PM2_NAME__|$PM2_NAME|g" "$TMP_MENU"
-
 sudo mv "$TMP_MENU" /usr/local/bin/node-socketio-chatroom
 sudo chmod +x /usr/local/bin/node-socketio-chatroom
 
