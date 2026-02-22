@@ -154,7 +154,7 @@ cd "$DIR"
 cat > package.json << 'EOF'
 {
   "name": "node-socketio-chatroom",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "main": "server.js",
   "scripts": { "start": "node server.js" },
   "dependencies": {
