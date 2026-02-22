@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>__APP_NAME_PLACEHOLDER__</title>
+
+  <!-- Tailwind config MUST be before tailwind script -->
+  <script>
+    window.tailwind = window.tailwind || {};
+    window.tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              DEFAULT: "var(--brand-color)",
+              dark: "var(--brand-dark)",
+              light: "var(--brand-light)",
+            },
+          },
+        },
+      },
+    };
+  </script>
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+
+  <link rel="stylesheet" href="/assets/theme.css" />
+  <link rel="stylesheet" href="/assets/app.css" />
+
+  <!-- libs (only once) -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+</head>
+
+<body class="w-full overflow-hidden flex flex-col dir-rtl">
+  <div id="app" class="h-full flex flex-col w-full">
+
+    <!-- Login Screen -->
+    <div v-if="!isLoggedIn"
+      class="fixed inset-0 bg-white/75 backdrop-blur-md flex items-center justify-center z-50 p-4">
+      <div class="panel w-full max-w-sm text-center overflow-hidden">
+        <div class="p-6 md:p-8">
+          <div
+            class="w-16 h-16 bg-brand rounded-2xl mx-auto flex items-center justify-center mb-4 text-white text-2xl shadow-lg shadow-brand/25">
+            <i class="fas fa-comments"></i>
+          </div>
+          <h1 class="text-2xl font-extrabold mb-2 text-brand-dark tracking-tight">{{ appName }}</h1>
+          <p class="text-xs text-gray-500 mb-6 leading-relaxed">برای ورود یا ثبت نام اطلاعات زیر را وارد کنید</p>
+
+          <div class="space-y-3">
+            <input v-model="loginForm.username" @keyup.enter="login" placeholder="نام کاربری" autocomplete="username"
+              class="w-full p-3 border rounded-xl bg-white/90 focus:ring-2 focus:ring-brand outline-none text-center dir-rtl text-base" />
+
+            <input v-model="loginForm.password" @keyup.enter="login" type="password" placeholder="رمز عبور"
+              autocomplete="current-password"
+              class="w-full p-3 border rounded-xl bg-white/90 focus:ring-2 focus:ring-brand outline-none text-center dir-rtl text-base" />
+
+            <button @click="login" :disabled="isAuthBusy || !loginForm.username || !loginForm.password"
+              class="w-full bg-brand text-white py-3 rounded-xl font-extrabold hover:bg-brand-dark transition shadow-lg shadow-brand/25 disabled:opacity-60 disabled:cursor-not-allowed tap">
+              <span v-if="!isAuthBusy">ورود / ثبت نام</span>
+              <span v-else class="inline-flex items-center gap-2 justify-center">
+                <i class="fas fa-circle-notch fa-spin"></i>
+                در حال اتصال...
+              </span>
+            </button>
+
+            <p v-if="error" class="text-red-600 text-sm mt-2 bg-red-50 p-2 rounded-lg border border-red-100">
+              {{ error }}
+            </p>
+          </div>
+
+          <div class="mt-5 text-[11px] text-gray-400 leading-relaxed">
+            با ورود شما، یک حساب کاربری (در صورت نبود) ساخته می‌شود.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chat Interface -->
+    <div v-else class="flex h-full relative w-full overflow-hidden">
+
+      <!-- Sidebar -->
+      <div :class="[
+          'absolute md:relative z-20 h-full bg-white border-l shadow-xl md:shadow-none transition-transform duration-300 w-72 flex flex-col shrink-0',
+          showSidebar ? 'translate-x-0' : 'translate-x-full md:translate-x-0'
+        ]">
+
+        <!-- User Info -->
+        <div class="p-4 bg-gradient-to-l from-brand to-brand-dark text-white shadow shrink-0">
+          <div class="flex justify-between items-center">
+            <div>
+              <h2 class="font-bold text-lg">{{ appName }}</h2>
+              <p class="text-xs opacity-90 mt-1 flex items-center gap-1">
+                <i class="fas fa-user-circle"></i> {{ user.username }}
+                <span v-if="user.role === 'admin'"
+                  class="bg-yellow-400 text-black px-1 rounded text-[9px] font-bold">مدیر</span>
+                <span v-else-if="user.role === 'vip'"
+                  class="bg-blue-400 text-white px-1 rounded text-[9px] font-bold">ویژه</span>
+              </p>
+            </div>
+            <div class="flex gap-1">
+              <button v-if="user.role === 'admin'" @click="showAdminSettings = true"
+                class="text-xs bg-white/20 p-2 rounded hover:bg-white/30" title="تنظیمات">
+                <i class="fas fa-cog"></i>
+              </button>
+              <button @click="logout" class="text-xs bg-white/20 p-2 rounded hover:bg-white/30" title="خروج">
+                <i class="fas fa-sign-out-alt"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tools -->
+        <div class="p-2 border-b bg-gray-50 flex gap-2 overflow-x-auto shrink-0">
+          <button @click="openSavedView" class="bg-brand/10 text-brand px-3 py-1 rounded text-xs whitespace-nowrap">
+            <i class="fas fa-bookmark"></i> پیام‌های ذخیره‌شده
+          </button>
+
+          <button v-if="canBan" @click="openBanList"
+            class="bg-red-100 text-red-600 px-3 py-1 rounded text-xs whitespace-nowrap">
+            <i class="fas fa-ban"></i> لیست سیاه
+          </button>
+        </div>
+
+        <!-- Search -->
+        <div class="p-2 border-b bg-white shrink-0">
+          <input v-model="searchQuery" @input="searchUser" placeholder="جستجوی کاربر..."
+            class="w-full px-3 py-1.5 rounded-lg border text-sm bg-gray-50 focus:outline-none focus:border-brand" />
+        </div>
+
+        <!-- Lists -->
+        <div class="flex-1 overflow-y-auto p-2 space-y-4">
+
+          <!-- Search Results -->
+          <div v-if="searchResults.length > 0">
+            <h3 class="text-xs font-bold text-gray-400 mb-2 px-2">نتایج جستجو</h3>
+            <ul>
+              <li v-for="u in searchResults" :key="u" @click="startPrivateChat(u)"
+                class="flex items-center gap-2 p-2 rounded hover:bg-gray-100 cursor-pointer">
+                <div class="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-gray-500">
+                  <i class="fas fa-user"></i>
+                </div>
+                <span class="text-sm font-medium">{{ u }}</span>
+              </li>
+            </ul>
+            <hr class="my-2" />
+          </div>
+
+          <!-- Channels -->
+          <div>
+            <h3 class="text-xs font-bold text-gray-400 mb-2 px-2 flex justify-between items-center">
+              کانال‌ها
+              <button v-if="canCreateChannel" @click="toggleCreateChannel"
+                class="text-brand hover:text-brand-dark text-sm bg-brand/10 w-10 h-10 rounded-full flex items-center justify-center tap"
+                aria-label="ایجاد کانال">
+                <i class="fas fa-plus"></i>
+              </button>
+            </h3>
+
+            <div v-if="showCreateChannelInput" class="mb-2 px-2 flex gap-1 animate-fade-in">
+              <input v-model="newChannelName" class="w-full text-xs p-1 border rounded" placeholder="نام کانال..." />
+              <button @click="createChannel" class="bg-green-500 text-white px-2 rounded text-xs">
+                <i class="fas fa-check"></i>
+              </button>
+            </div>
+
+            <div v-if="channels.length === 0" class="px-2 py-3 text-xs text-gray-400 leading-relaxed">
+              هیچ کانالی برای شما فعال نیست.
+              <div class="mt-1">ادمین باید دسترسی کانال‌ها را به شما بدهد.</div>
+            </div>
+
+            <ul class="space-y-1">
+              <li v-for="ch in channels" :key="ch"
+                class="group relative p-2 rounded-lg cursor-pointer flex items-center justify-between transition"
+                :class="currentChannel === ch ? 'bg-brand/10 text-brand font-bold' : 'hover:bg-gray-100 text-gray-600'">
+                <div class="flex items-center gap-2 w-full" @click="joinChannel(ch)">
+                  <i class="fas fa-hashtag text-xs opacity-50"></i>
+                  <span class="text-sm truncate">{{ ch }}</span>
+                </div>
+                <div v-if="unreadCounts[ch] > 0" class="unread-badge">{{ unreadCounts[ch] }}</div>
+                <button v-if="canCreateChannel && ch !== 'General'" @click.stop="deleteChannel(ch)"
+                  class="text-red-400 hover:text-red-600 px-2 hidden group-hover:block">
+                  <i class="fas fa-trash text-xs"></i>
+                </button>
+              </li>
+            </ul>
+          </div>
+
+          <!-- Online Users -->
+          <div>
+            <h3 class="text-xs font-bold text-gray-400 mb-2 px-2 mt-4">
+              کاربران آنلاین ({{ sortedUsers.length }})
+            </h3>
+            <ul class="space-y-1">
+              <li v-for="u in sortedUsers" :key="u.username" @click="handleUserClick(u)"
+                @touchstart="lpStartUser($event, u.username)" @touchmove="lpMove($event)" @touchend="lpEnd()"
+                @touchcancel="lpEnd()" @contextmenu.prevent="showUserContext($event, u.username)"
+                class="flex items-center gap-2 p-2 rounded hover:bg-gray-100 cursor-pointer transition">
+                <div class="relative">
+                  <div
+                    class="w-9 h-9 rounded-full flex items-center justify-center text-gray-600 text-xs font-bold shadow-sm"
+                    :class="{
+                      'bg-yellow-100 text-yellow-700': u.role === 'admin',
+                      'bg-blue-100 text-blue-700': u.role === 'vip',
+                      'bg-gray-200': u.role === 'user'
+                    }">
+                    <i v-if="u.role === 'admin'" class="fas fa-crown text-sm"></i>
+                    <i v-else-if="u.role === 'vip'" class="fas fa-gem text-sm"></i>
+                    <span v-else>{{ u.username.substring(0,2).toUpperCase() }}</span>
+                  </div>
+                  <div class="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-white rounded-full">
+                  </div>
+                </div>
+
+                <div class="flex flex-col flex-1">
+                  <span class="text-sm font-medium flex items-center gap-1">
+                    {{ u.username }}
+                    <span v-if="u.username === user.username" class="text-[10px] text-gray-400">(شما)</span>
+                  </span>
+                  <span class="text-[10px] text-gray-400">
+                    {{ u.role === 'admin' ? 'مدیر کل' : (u.role === 'vip' ? 'کاربر ویژه' : 'کاربر') }}
+                  </span>
+                </div>
+
+                <div v-if="unreadCounts[u.username] > 0" class="unread-badge">{{ unreadCounts[u.username] }}</div>
+              </li>
+            </ul>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Mobile Sidebar Overlay -->
+      <div v-if="showSidebar" @click="showSidebar = false"
+        class="absolute inset-0 bg-white/70 backdrop-blur-sm z-10 md:hidden"></div>
+
+      <!-- Chat Area -->
+      <div class="flex-1 flex flex-col relative h-full min-w-0" style="background: var(--bg-chat);">
+
+        <!-- Wallpaper -->
+        <div class="absolute inset-0 opacity-5 pointer-events-none"
+          style="background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAIklEQVQIW2NkQAKrVq36zwjjgzhhYWGMYAEYB8RmROaABADeOQ8CXl/xfgAAAABJRU5ErkJggg==');">
+        </div>
+
+        <!-- Header -->
+        <div
+          class="bg-white/90 backdrop-blur-md border-b border-black/5 p-3 flex items-center gap-3 z-20 shrink-0 sticky top-0">
+          <button class="md:hidden text-gray-600 p-2 rounded-lg hover:bg-black/5 tap" @click="showSidebar = true"
+            aria-label="باز کردن منو">
+            <i class="fas fa-bars"></i>
+          </button>
+
+          <div class="flex-1 min-w-0">
+            <h2 class="font-extrabold text-gray-900 flex items-center gap-2 truncate">
+              <span v-if="isSavedView" class="text-brand"><i class="fas fa-bookmark"></i></span>
+              <span v-else-if="isPrivateChat" class="text-brand"><i class="fas fa-user-lock"></i></span>
+              <span v-else class="text-gray-500"><i class="fas fa-hashtag"></i></span>
+              <span class="truncate">{{ displayChannelName }}</span>
+            </h2>
+
+            <div class="mt-0.5 flex items-center gap-2 text-[11px] text-gray-500">
+              <span :class="isConnected ? 'text-green-600' : 'text-red-600'" class="inline-flex items-center gap-1">
+                <span class="inline-block w-2 h-2 rounded-full"
+                  :class="isConnected ? 'bg-green-500' : 'bg-red-500'"></span>
+                <span v-if="isConnected">متصل</span>
+                <span v-else>قطع</span>
+              </span>
+              <span class="opacity-60">•</span>
+              <span class="truncate">برای رفتن به خط جدید: Shift + Enter</span>
+            </div>
+          </div>
+
+          <button v-if="showScrollDown" @click="scrollToBottom(true)"
+            class="w-10 h-10 rounded-full bg-black/5 hover:bg-black/10 text-gray-700 flex items-center justify-center tap"
+            aria-label="رفتن به آخر گفتگو">
+            <i class="fas fa-arrow-down"></i>
+          </button>
+        </div>
+
+        <!-- Upload Progress -->
+        <div v-if="isUploading"
+          class="bg-brand-light/20 p-2 text-center text-xs text-brand-dark border-b border-brand-light/30">
+          <div class="flex items-center justify-between px-4 mb-1">
+            <span>در حال ارسال فایل...</span>
+            <span>{{ uploadProgress }}%</span>
+          </div>
+          <div class="w-full bg-gray-200 rounded-full h-1.5">
+            <div class="bg-brand h-1.5 rounded-full transition-all duration-200"
+              :style="{ width: uploadProgress + '%' }"></div>
+          </div>
+        </div>
+
+        <!-- Access Denied Banner -->
+        <div v-if="accessDeniedBanner"
+          class="bg-red-50 border-b border-red-100 text-red-700 text-xs p-2 px-4 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <i class="fas fa-lock"></i>
+            <span>{{ accessDeniedBanner }}</span>
+          </div>
+          <button class="text-red-700/70 hover:text-red-700" @click="accessDeniedBanner = ''">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+
+        <!-- Messages -->
+        <div class="flex-1 overflow-y-auto p-4 pb-28 space-y-2 min-h-0" id="messages-container" ref="msgContainer">
+
+          <div v-for="msg in messages" :key="msg.id"
+            :class="['flex w-full', msg.sender === user.username ? 'justify-end' : 'justify-start']"
+            :id="'msg-row-' + msg.id">
+            <div @touchstart="touchStart($event, msg); lpStartMessage($event, msg)"
+              @touchmove="touchMove($event); lpMove($event)" @touchend="touchEnd($event); lpEnd()"
+              @touchcancel="lpEnd()" @contextmenu.prevent="showContext($event, msg)" :style="getSwipeStyle(msg.id)"
+              class="msg-bubble transition-transform duration-75 ease-out select-none" :id="'msg-' + msg.id">
+              <div
+                class="absolute right-[-40px] top-1/2 transform -translate-y-1/2 text-brand text-lg opacity-0 transition-opacity"
+                :class="{ 'opacity-100': swipeId === msg.id && swipeOffset < -40 }">
+                <i class="fas fa-reply"></i>
+              </div>
+
+              <div :class="[
+                  'rounded-2xl px-4 py-2 shadow-sm text-sm relative border',
+                  msg.sender === user.username ? 'bg-brand-light border-brand/20 rounded-tr-none' : 'bg-white border-gray-100 rounded-tl-none'
+                ]">
+                <div v-if="msg.replyTo" @click="scrollToMessage(msg.replyTo.id)"
+                  class="mb-2 p-2 rounded bg-black/5 border-r-4 border-brand cursor-pointer text-xs">
+                  <div class="font-bold text-brand-dark mb-1">{{ msg.replyTo.sender }}</div>
+                  <div class="truncate opacity-70">{{ msg.replyTo.text || 'Media' }}</div>
+                </div>
+
+                <div v-if="msg.sender !== user.username"
+                  class="font-bold text-xs mb-1 text-brand-dark flex items-center gap-1">
+                  {{ msg.sender }}
+                  <i v-if="msg.role === 'admin'" class="fas fa-crown text-yellow-500 text-[10px]"></i>
+                  <i v-else-if="msg.role === 'vip'" class="fas fa-gem text-blue-500 text-[10px]"></i>
+                </div>
+
+                <div class="break-words leading-relaxed" v-if="msg.type === 'text'">{{ msg.text }}</div>
+                <img v-if="msg.type === 'image'" :src="msg.content"
+                  class="max-w-full rounded-lg mt-1 cursor-pointer hover:opacity-90 transition"
+                  @click="viewImage(msg.content)" />
+                <video v-if="msg.type === 'video'" :src="msg.content" controls
+                  class="max-w-full rounded-lg mt-1"></video>
+                <audio v-if="msg.type === 'audio'" :src="msg.content" controls
+                  class="mt-1 w-full min-w-[200px]"></audio>
+
+                <div v-if="msg.type === 'file'" class="mt-1 bg-black/5 p-3 rounded flex items-center gap-3">
+                  <div class="w-10 h-10 bg-brand/20 rounded flex items-center justify-center text-brand text-xl">
+                    <i class="fas fa-file-alt"></i>
+                  </div>
+                  <div class="flex-1 overflow-hidden">
+                    <div class="truncate font-bold text-xs">{{ msg.fileName || 'File' }}</div>
+                    <a :href="safeLink(msg.content)" target="_blank" rel="noopener noreferrer"
+                      class="text-[10px] text-blue-500 hover:underline">دانلود فایل</a>
+                  </div>
+                </div>
+
+                <div
+                  :class="['text-[9px] mt-1 text-left', msg.sender === user.username ? 'text-brand-dark/50' : 'text-gray-400']">
+                  {{ msg.timestamp }}
+                  <i v-if="msg.sender === user.username" class="fas fa-check-double ml-1 text-blue-400"></i>
+                </div>
+
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Reply Input -->
+        <div v-if="replyingTo && !isSavedView"
+          class="bg-gray-50 border-t p-2 flex justify-between items-center border-b border-gray-200 shrink-0">
+          <div class="flex-1 text-sm border-r-4 border-brand pr-3">
+            <div class="font-bold text-brand text-xs">پاسخ به {{ replyingTo.sender }}</div>
+            <div class="text-gray-500 text-xs truncate">{{ replyingTo.text || 'File' }}</div>
+          </div>
+          <button @click="cancelReply" class="p-2 text-gray-500 hover:text-red-500">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+
+        <!-- Input Area -->
+        <div
+          class="p-2 safe-pb bg-white/90 backdrop-blur-md border-t border-black/5 flex items-end gap-2 z-20 shrink-0">
+          <div class="flex pb-2 gap-1">
+            <button class="w-10 h-10 rounded-full hover:bg-black/5 text-gray-600 text-lg transition tap"
+              @click="$refs.fileInput.click()" aria-label="ارسال فایل">
+              <i class="fas fa-paperclip"></i>
+            </button>
+            <input ref="fileInput" type="file" class="hidden" @change="handleFileUpload" />
+
+            <button @click="toggleRecording" :class="[
+                'w-10 h-10 rounded-full transition text-lg tap',
+                isRecording ? 'text-red-600 bg-red-50 animate-pulse' : 'hover:bg-black/5 text-gray-600'
+              ]" aria-label="ضبط صدا">
+              <i class="fas fa-microphone"></i>
+            </button>
+          </div>
+
+          <div
+            class="flex-1 bg-gray-100/80 rounded-2xl flex items-end p-2 border border-black/5 focus-within:ring-1 focus-within:ring-brand focus-within:bg-white transition">
+            <textarea v-model="messageText" @focus="onComposerFocus" @blur="onComposerBlur"
+              @keydown="handleComposerKeydown" @input="autoResize" ref="textarea" placeholder="پیام..."
+              class="flex-1 bg-transparent outline-none max-h-40 min-h-[44px] resize-none py-2 px-2 text-base leading-6"></textarea>
+          </div>
+
+          <button @click="sendMessage" :disabled="!canSend"
+            class="w-12 h-12 rounded-full bg-brand text-white shadow-lg hover:bg-brand-dark transition flex items-center justify-center mb-0.5 disabled:opacity-60 disabled:cursor-not-allowed tap"
+            aria-label="ارسال">
+            <i class="fas fa-paper-plane text-lg translate-x-[-2px] translate-y-[1px]"></i>
+          </button>
+        </div>
+
+        <!-- Context Menu -->
+        <div v-if="contextMenu.visible" :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }"
+          class="context-menu" @click.stop>
+
+          <template v-if="contextMenu.type === 'message'">
+            <div @click="saveThisMessage(contextMenu.target); contextMenu.visible = false"
+              class="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm flex items-center gap-2">
+              <i class="fas fa-bookmark text-gray-400 w-4"></i> ذخیره پیام
+            </div>
+
+            <div @click="setReply(contextMenu.target); contextMenu.visible = false"
+              class="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm flex items-center gap-2 border-t">
+              <i class="fas fa-reply text-gray-400 w-4"></i> پاسخ
+            </div>
+
+            <div v-if="user.role === 'admin'" @click="deleteMessage(contextMenu.target.id); contextMenu.visible = false"
+              class="px-3 py-2 hover:bg-red-50 text-red-600 cursor-pointer text-sm flex items-center gap-2 border-t">
+              <i class="fas fa-trash w-4"></i> حذف پیام
+            </div>
+
+            <div v-if="canBan && contextMenu.target.sender !== user.username"
+              @click="banUser(contextMenu.target.sender); contextMenu.visible = false"
+              class="px-3 py-2 hover:bg-red-50 text-red-600 cursor-pointer text-sm flex items-center gap-2 border-t">
+              <i class="fas fa-ban w-4"></i> بن کردن کاربر
+            </div>
+          </template>
+
+          <template v-if="contextMenu.type === 'user'">
+            <div @click="startPrivateChat(contextMenu.target); contextMenu.visible = false"
+              class="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm flex items-center gap-2">
+              <i class="fas fa-comment text-gray-400 w-4"></i> پیام خصوصی
+            </div>
+
+            <template v-if="user.role === 'admin' && contextMenu.target !== user.username">
+              <div @click="openAccessModal(contextMenu.target); contextMenu.visible = false"
+                class="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm flex items-center gap-2 border-t">
+                <i class="fas fa-key text-brand w-4"></i> مدیریت دسترسی کانال‌ها
+              </div>
+
+              <div @click="setRole(contextMenu.target, 'vip'); contextMenu.visible = false"
+                class="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm flex items-center gap-2 border-t">
+                <i class="fas fa-gem text-blue-500 w-4"></i> تبدیل به ویژه
+              </div>
+
+              <div @click="setRole(contextMenu.target, 'user'); contextMenu.visible = false"
+                class="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm flex items-center gap-2 border-t">
+                <i class="fas fa-user text-gray-400 w-4"></i> تبدیل به عادی
+              </div>
+            </template>
+
+            <div v-if="canBan && contextMenu.target !== user.username"
+              @click="banUser(contextMenu.target); contextMenu.visible = false"
+              class="px-3 py-2 hover:bg-red-50 text-red-600 cursor-pointer text-sm flex items-center gap-2 border-t">
+              <i class="fas fa-ban w-4"></i> بن کردن
+            </div>
+          </template>
+
+        </div>
+      </div>
+
+      <!-- Admin Settings Modal -->
+      <div v-if="showAdminSettings"
+        class="fixed inset-0 bg-white/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden flex flex-col border border-black/5">
+          <div class="p-4 border-b flex justify-between items-center bg-gray-50">
+            <h3 class="font-bold text-gray-700">تنظیمات چت روم</h3>
+            <button @click="showAdminSettings = false" class="text-gray-400 hover:text-gray-600">
+              <i class="fas fa-times"></i>
+            </button>
+          </div>
+          <div class="p-6 space-y-4">
+            <div class="flex items-center justify-between">
+              <label class="text-sm font-bold text-gray-700">مخفی کردن لیست کاربران</label>
+              <input type="checkbox" v-model="adminSettings.hideUserList" class="w-5 h-5 accent-brand" />
+            </div>
+
+            <div class="border-t pt-4">
+              <div class="flex items-center justify-between">
+                <label class="text-sm font-bold text-gray-700">حالت دسترسی کانال‌ها</label>
+                <select v-model="adminSettings.accessMode" class="border rounded-lg px-2 py-1 text-sm bg-white">
+                  <option value="restricted">Restricted (فقط با اجازه ادمین)</option>
+                  <option value="open">Open (همه کاربران)</option>
+                </select>
+              </div>
+              <p class="text-xs text-gray-500 text-justify leading-relaxed mt-2">
+                در حالت Restricted، کاربر فقط کانال‌هایی که ادمین برای او فعال کرده را می‌بیند و می‌تواند چت کند.
+              </p>
+            </div>
+
+            <button @click="saveAdminSettings"
+              class="w-full bg-brand text-white py-2 rounded-lg text-sm font-bold shadow hover:bg-brand-dark transition">
+              ذخیره تنظیمات
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Ban List Modal -->
+      <div v-if="showBanModal"
+        class="fixed inset-0 bg-white/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div
+          class="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden flex flex-col max-h-[80vh] border border-black/5">
+          <div class="p-4 border-b flex justify-between items-center bg-gray-50">
+            <h3 class="font-bold text-gray-700">لیست سیاه (بن شده‌ها)</h3>
+            <button @click="showBanModal = false" class="text-gray-400 hover:text-gray-600">
+              <i class="fas fa-times"></i>
+            </button>
+          </div>
+          <div class="overflow-y-auto p-4 flex-1">
+            <div v-if="bannedUsers.length === 0" class="text-center text-gray-400 py-4">هیچ کاربری بن نشده است.</div>
+            <ul class="divide-y">
+              <li v-for="u in bannedUsers" :key="u" class="py-3 flex justify-between items-center">
+                <span class="font-bold text-gray-700">{{ u }}</span>
+                <button @click="unbanUser(u)"
+                  class="text-xs bg-green-100 text-green-700 px-3 py-1 rounded hover:bg-green-200">
+                  آزاد کردن
+                </button>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- Admin Access Modal -->
+      <div v-if="showAccessModal"
+        class="fixed inset-0 bg-white/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div
+          class="bg-white rounded-xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col max-h-[85vh] border border-black/5">
+          <div class="p-4 border-b flex justify-between items-center bg-gray-50">
+            <h3 class="font-bold text-gray-700">
+              <i class="fas fa-key text-brand"></i>
+              مدیریت دسترسی کانال‌ها: {{ accessModalUser }}
+            </h3>
+            <button @click="showAccessModal = false" class="text-gray-400 hover:text-gray-600">
+              <i class="fas fa-times"></i>
+            </button>
+          </div>
+
+          <div class="p-4 overflow-y-auto flex-1">
+            <div class="text-xs text-gray-500 mb-3 leading-relaxed">
+              با فعال/غیرفعال کردن هر کانال، دسترسی کاربر به مشاهده و چت در آن کانال کنترل می‌شود.
+            </div>
+
+            <div v-if="accessChannels.length === 0" class="text-center text-gray-400 py-6">
+              هیچ کانالی وجود ندارد.
+            </div>
+
+            <div class="space-y-2">
+              <div v-for="ch in accessChannels" :key="ch"
+                class="flex items-center justify-between border rounded-lg px-3 py-2">
+                <div class="flex items-center gap-2">
+                  <i class="fas fa-hashtag text-xs opacity-60"></i>
+                  <span class="font-bold text-sm text-gray-700">{{ ch }}</span>
+                </div>
+
+                <label class="inline-flex items-center gap-2 text-xs text-gray-600">
+                  <input type="checkbox" class="w-5 h-5 accent-brand" :checked="!!accessMap[ch]"
+                    @change="toggleUserAccess(ch, $event.target.checked)" />
+                  دسترسی
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div class="p-4 border-t bg-gray-50 flex items-center justify-between">
+            <button class="text-xs bg-gray-200 text-gray-700 px-3 py-2 rounded" @click="refreshAccessModal">
+              بروزرسانی
+            </button>
+            <button class="text-xs bg-brand text-white px-3 py-2 rounded shadow hover:bg-brand-dark"
+              @click="showAccessModal = false">
+              بستن
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Lightbox -->
+      <div v-if="lightboxImage" @click="lightboxImage = null"
+        class="fixed inset-0 bg-white/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
+        <img :src="lightboxImage" class="max-w-full max-h-full rounded shadow-2xl" />
+        <button class="absolute top-4 right-4 text-gray-700 text-3xl">&times;</button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- your app code -->
+  <script src="/assets/app.js"></script>
+</body>
+
+</html>
