@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# node-socketio-chatroom - Interactive Installer (Repo-based, modular-client compatible, optimized)
+# =========================
+# node-socketio-chatroom Installer (Enhanced Preflight)
+# =========================
+
 cleanup() { true; }
 trap cleanup EXIT
+
+# ---- Installer metadata ----
+INSTALLER_VERSION="1.1.0"
+INSTALLER_BUILD_DATE="2026-02-22"
 
 DIR_DEFAULT="$HOME/chat-node-socketio-chatroom"
 APP_NAME_DEFAULT="node-socketio-chatroom"
@@ -15,16 +22,112 @@ need_apt_update=0
 
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
-apt_install_if_missing() {
-  local pkg="$1"
-  local cmd="${2:-$1}"
-  if ! have_cmd "$cmd"; then
-    need_apt_update=1
-    apt_update_if_needed
-    sudo apt-get install -y "$pkg"
+# ---- pretty logging (auto-disable colors if not a TTY) ----
+if [[ -t 1 ]]; then
+  C_RESET=$'\033[0m'
+  C_DIM=$'\033[2m'
+  C_BOLD=$'\033[1m'
+  C_RED=$'\033[31m'
+  C_GREEN=$'\033[32m'
+  C_YELLOW=$'\033[33m'
+  C_BLUE=$'\033[34m'
+else
+  C_RESET="" C_DIM="" C_BOLD="" C_RED="" C_GREEN="" C_YELLOW="" C_BLUE=""
+fi
+
+log()   { echo "${C_BLUE}[INFO]${C_RESET} $*"; }
+ok()    { echo "${C_GREEN}[OK]${C_RESET}   $*"; }
+warn()  { echo "${C_YELLOW}[WARN]${C_RESET} $*"; }
+die()   { echo "${C_RED}[ERR]${C_RESET}  $*" >&2; exit 1; }
+
+# ---- OS / system info ----
+os_pretty() {
+  if [[ -r /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    echo "${PRETTY_NAME:-Linux}"
+  else
+    echo "Linux"
   fi
 }
 
+get_ip() {
+  curl -fsS --max-time 3 https://api.ipify.org 2>/dev/null \
+    || curl -fsS --max-time 3 https://ifconfig.co 2>/dev/null \
+    || echo "UNKNOWN"
+}
+
+show_versions_if_present() {
+  if have_cmd node; then ok "node: $(node -v 2>/dev/null || echo '?')"; else warn "node: not installed"; fi
+  if have_cmd npm;  then ok "npm:  $(npm -v 2>/dev/null || echo '?')";  else warn "npm:  not installed"; fi
+  if have_cmd pm2;  then ok "pm2:  $(pm2 -v 2>/dev/null || echo '?')";  else warn "pm2:  not installed"; fi
+  if have_cmd git;  then ok "git:  $(git --version 2>/dev/null | awk '{print $3}' || echo '?')"; else warn "git:  not installed"; fi
+  if have_cmd curl; then ok "curl: $(curl --version 2>/dev/null | head -n1 | awk '{print $2}' || echo '?')"; else warn "curl: not installed"; fi
+}
+
+# ---- preflight checks ----
+require_sudo() {
+  if [[ "${EUID:-0}" -eq 0 ]]; then
+    ok "Running as root"
+    return 0
+  fi
+
+  if ! have_cmd sudo; then
+    die "sudo is required (not found). Run as root or install sudo."
+  fi
+
+  # non-interactive sudo test
+  if sudo -n true 2>/dev/null; then
+    ok "sudo: available (non-interactive)"
+  else
+    log "sudo: needs password (you may be prompted)"
+    sudo true || die "sudo authentication failed"
+  fi
+}
+
+check_internet() {
+  # minimal connectivity check
+  if ! have_cmd curl; then
+    warn "curl not found yet (will be installed later). Skipping connectivity test."
+    return 0
+  fi
+  curl -fsS --max-time 5 "https://raw.githubusercontent.com/github/gitignore/main/Node.gitignore" >/dev/null 2>&1 \
+    && ok "Internet: reachable (raw.githubusercontent.com)" \
+    || warn "Internet: could not reach raw.githubusercontent.com (install may fail)"
+}
+
+check_repo_reachable() {
+  # fast check for repo existence/branch (best-effort)
+  if ! have_cmd git; then
+    warn "git not found yet (will be installed later). Skipping repo check."
+    return 0
+  fi
+  if git ls-remote --heads "$REPO_URL_DEFAULT" "$BRANCH_DEFAULT" >/dev/null 2>&1; then
+    ok "Repo: reachable ($BRANCH_DEFAULT)"
+  else
+    warn "Repo: could not verify branch '$BRANCH_DEFAULT' (will attempt clone anyway)"
+  fi
+}
+
+port_in_use() {
+  local p="$1"
+
+  if have_cmd ss; then
+    ss -lptn "( sport = :$p )" 2>/dev/null | grep -q ":$p" && return 0 || return 1
+  fi
+
+  if have_cmd lsof; then
+    lsof -iTCP:"$p" -sTCP:LISTEN -n -P >/dev/null 2>&1 && return 0 || return 1
+  fi
+
+  if have_cmd netstat; then
+    netstat -lntp 2>/dev/null | grep -q ":$p " && return 0 || return 1
+  fi
+
+  return 1
+}
+
+# ---- apt helpers (unchanged behavior, but safer) ----
 apt_update_if_needed() {
   if [[ "$need_apt_update" -eq 1 ]]; then
     sudo apt-get update -y
@@ -32,9 +135,37 @@ apt_update_if_needed() {
   fi
 }
 
-echo "========================================"
-echo "    node-socketio-chatroom Installer"
-echo "========================================"
+apt_install_if_missing() {
+  local pkg="$1"
+  local cmd="${2:-$1}"
+  if ! have_cmd "$cmd"; then
+    need_apt_update=1
+    apt_update_if_needed
+    sudo apt-get install -y "$pkg"
+    ok "Installed: $pkg"
+  else
+    ok "Present: $cmd"
+  fi
+}
+
+# ---- Banner ----
+echo "${C_BOLD}========================================${C_RESET}"
+echo "${C_BOLD}  node-socketio-chatroom Installer${C_RESET} ${C_DIM}v${INSTALLER_VERSION} (${INSTALLER_BUILD_DATE})${C_RESET}"
+echo "${C_BOLD}========================================${C_RESET}"
+echo ""
+
+log "System:  $(os_pretty) | kernel: $(uname -r) | arch: $(uname -m)"
+PUBLIC_IP="$(get_ip)"
+log "Host:    $(hostname 2>/dev/null || echo '?') | user: $(id -un 2>/dev/null || echo '?') | ip: ${PUBLIC_IP}"
+echo ""
+
+log "Tooling versions (if present):"
+show_versions_if_present
+echo ""
+
+require_sudo
+check_internet
+check_repo_reachable
 echo ""
 
 read -r -p "Install directory [default: ${DIR_DEFAULT}]: " INPUT_DIR
@@ -81,6 +212,12 @@ read -r -p "Port [default: 3000]: " INPUT_PORT
 PORT="${INPUT_PORT:-3000}"
 [[ "$PORT" =~ ^[0-9]{1,5}$ ]] && (( PORT >= 1 && PORT <= 65535 )) || { echo "Invalid port"; exit 1; }
 
+if port_in_use "$PORT"; then
+  die "Port $PORT is already in use. Choose another port or stop the conflicting service."
+else
+  ok "Port $PORT is free"
+fi
+
 echo ""
 echo "Allowed Origins for CORS (comma-separated)."
 echo "Example: https://yourdomain.com,http://localhost:$PORT"
@@ -108,6 +245,14 @@ case "${COLOR_CHOICE:-1}" in
   *) C_DEF="#2563EB"; C_DARK="#1D4ED8"; C_LIGHT="#EFF6FF" ;;
 esac
 
+echo ""
+log "Summary:"
+echo "  DIR:            $DIR"
+echo "  App Name:       $APP_NAME_VAL"
+echo "  Admin User:     $ADMIN_USER"
+echo "  Port:           $PORT"
+echo "  AllowedOrigins: $ALLOWED_ORIGINS"
+echo "  Theme Color:    $C_DEF"
 echo ""
 echo "[1/7] Checking system deps..."
 
@@ -182,7 +327,8 @@ REQ_FILES=(
   "$DIR/menu.sh"
 )
 
-# add server entry to required files
+missing=0
+
 if [[ -n "$SERVER_ENTRY" ]]; then
   REQ_FILES+=("$SERVER_ENTRY")
 else
@@ -190,9 +336,6 @@ else
   missing=1
 fi
 
-# PORT="$PORT" pm2 start "$DIR/src/server.js" --name "$PM2_NAME"
-
-missing=0
 for f in "${REQ_FILES[@]}"; do
   if [[ ! -f "$f" ]]; then
     echo "ERROR: Missing required file: $f"
@@ -301,8 +444,7 @@ echo "      INSTALLATION COMPLETE! 🚀"
 echo "========================================"
 echo "Admin User: $ADMIN_USER"
 echo "Admin Pass: stored hashed in data/config.json (password not shown again)"
-IP="$(curl -fsS https://api.ipify.org 2>/dev/null || curl -fsS https://ifconfig.co 2>/dev/null || echo 'YOUR_SERVER_IP')"
-echo "Access URL: http://$IP:$PORT"
+echo "Access URL: http://${PUBLIC_IP}:$PORT"
 echo ""
 echo "Type 'node-socketio-chatroom' to manage your server."
 echo "========================================"
