@@ -199,6 +199,8 @@ app.use(helmet({
 
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader('X-Frame-Options', 'DENY');
   next();
 });
 
@@ -1310,7 +1312,33 @@ socket.on('join_private', (targetUser, cb) => {
     const cleanTextVal = cleanText(data?.text, 1000);
     const cleanFileName = data?.fileName ? xss(String(data.fileName)).substring(0, 120) : undefined;
     const type = String(data?.type || 'text');
-    const content = data?.content;
+
+    // ✅ validate content to prevent javascript:/phishing
+    let content = (typeof data?.content === 'string') ? data.content : undefined;
+
+    function isSafeUploadsUrl(u) {
+      if (!u || typeof u !== 'string') return false;
+      // allow: /uploads/<file> or /uploads/<file>?t=...
+      if (u.startsWith('/uploads/')) return true;
+      return false;
+    }
+
+    function isSafeDataUrl(u, kind) {
+      if (!u || typeof u !== 'string') return false;
+      // allow only audio recording data url (your recorder uses audio/webm)
+      if (kind === 'audio') return u.startsWith('data:audio/');
+      // disallow data:image/video/file from users (you use uploads for those)
+      return false;
+    }
+
+    if (type !== 'text') {
+      if (!content) return socket.emit('error', 'محتوای پیام نامعتبر است.');
+      const ok =
+        isSafeUploadsUrl(content) ||
+        isSafeDataUrl(content, type);
+
+      if (!ok) return socket.emit('error', 'لینک/محتوا مجاز نیست.');
+    }
 
     if (type === 'audio' && typeof content === 'string' && content.length > 2_500_000) return socket.emit('error', 'فایل صوتی خیلی بزرگ است.');
     if (type === 'image' && typeof content === 'string' && content.length > 3_500_000) return socket.emit('error', 'تصویر خیلی بزرگ است.');
@@ -1692,7 +1720,7 @@ cat > public/index.html << 'EOF'
               <li v-for="ch in channels" :key="ch"
                 class="group relative p-2 rounded-lg cursor-pointer flex items-center justify-between transition"
                 :class="currentChannel === ch ? 'bg-brand/10 text-brand font-bold' : 'hover:bg-gray-100 text-gray-600'">
-                <div class="flex items-center gap-2 w-full" @click="joinChannel(ch, false)">
+                <div class="flex items-center gap-2 w-full" @click="joinChannel(ch)">
                   <i class="fas fa-hashtag text-xs opacity-50"></i>
                   <span class="text-sm truncate">{{ ch }}</span>
                 </div>
@@ -1857,7 +1885,8 @@ cat > public/index.html << 'EOF'
                     </div>
                     <div class="flex-1 overflow-hidden">
                         <div class="truncate font-bold text-xs">{{ msg.fileName || 'File' }}</div>
-                        <a :href="msg.content" target="_blank" class="text-[10px] text-blue-500 hover:underline">دانلود فایل</a>
+                        <a :href="safeLink(msg.content)" target="_blank" rel="noopener noreferrer"
+                          class="text-[10px] text-blue-500 hover:underline">دانلود فایل</a>
                     </div>
                     </div>
 
@@ -2620,6 +2649,21 @@ const startPrivateChat = (targetUsername) => {
 
         const viewImage = (src) => lightboxImage.value = src;
 
+        const safeLink = (u) => {
+          try {
+            const s = String(u || '').trim();
+            if (!s) return '#';
+            // فقط لینک‌های داخلی آپلود
+            if (s.startsWith('/uploads/')) return s;
+            // data url فقط برای audio (لینک دانلود فایل نیست)
+            if (s.startsWith('data:')) return '#';
+            // هر چیز دیگه بلاک
+            return '#';
+          } catch {
+            return '#';
+          }
+        };
+
         const autoResize = (e) => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; };
 
         const toggleRecording = async () => {
@@ -2675,7 +2719,8 @@ const startPrivateChat = (targetUsername) => {
           openSavedView, unsave,
           // access UI
           showAccessModal, accessModalUser, accessChannels, accessMap, openAccessModal, toggleUserAccess, refreshAccessModal,
-          accessDeniedBanner
+          accessDeniedBanner,
+          safeLink
         };
       }
     }).mount('#app');
@@ -2717,18 +2762,6 @@ fi
 
 # --- Data-at-rest encryption key (AES-256-GCM) ---
 # Try OpenSSL, fallback to /dev/urandom hex
-DATA_ENC_KEY=""
-if command -v openssl >/dev/null 2>&1; then
-  DATA_ENC_KEY="$(openssl rand -hex 32)"
-else
-  DATA_ENC_KEY="$(LC_ALL=C tr -dc 'a-f0-9' </dev/urandom | head -c 64)"
-fi
-
-if [[ -z "${DATA_ENC_KEY}" || "${#DATA_ENC_KEY}" -lt 64 ]]; then
-  echo "ERROR: failed to generate dataEncKey"
-  exit 1
-fi
-
 DATA_ENC_KEY=""
 if command -v openssl >/dev/null 2>&1; then
   DATA_ENC_KEY="$(openssl rand -hex 32)"
