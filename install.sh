@@ -60,6 +60,7 @@ DIR_DEFAULT="$HOME/chat-node-socketio-chatroom"
 APP_NAME_DEFAULT="node-socketio-chatroom"
 
 need_apt_update=0
+CERTBOT_DRYRUN_OK=0
 
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 find_npm_bin() {
@@ -375,31 +376,47 @@ issue_cert_cloudflare() {
   sudo mkdir -p /root/.secrets
   sudo chmod 700 /root/.secrets
 
+  # Write credentials file (exact format expected by certbot-dns-cloudflare)
   local tmp
   tmp="$(mktemp)"
   cat > "$tmp" <<EOF
 dns_cloudflare_api_token = ${token}
 EOF
-  sudo mv "$tmp" /root/.secrets/cloudflare.ini
-  sudo chmod 600 /root/.secrets/cloudflare.ini
+  sudo mv "$tmp" "/root/.secrets/cloudflare-${domain}.ini"
+  sudo chmod 600 "/root/.secrets/cloudflare-${domain}.ini"
 
-  # If cert exists but renewal config uses "manual", migrate by forcing a Cloudflare re-issue.
+  local live_ok=0
+  if [[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" && -f "/etc/letsencrypt/live/${domain}/privkey.pem" ]]; then
+    live_ok=1
+  fi
+
   local renew_conf="/etc/letsencrypt/renewal/${domain}.conf"
   local need_migrate=0
+
+  # If renewal config exists and uses manual authenticator, we MUST migrate it
   if [[ -f "$renew_conf" ]] && grep -qE '^[[:space:]]*authenticator[[:space:]]*=[[:space:]]*manual[[:space:]]*$' "$renew_conf"; then
     need_migrate=1
     warn "Existing renewal config for ${domain} uses manual authenticator; migrating to Cloudflare DNS plugin..."
   fi
 
-  if [[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" && -f "/etc/letsencrypt/live/${domain}/privkey.pem" && "$need_migrate" -eq 0 ]]; then
-    ok "Existing certificate found for ${domain} (skipping issuance)."
+  # If cert exists but a dry-run fails, also migrate (token/headers/old config issues)
+  if [[ "$live_ok" -eq 1 && "$need_migrate" -eq 0 ]]; then
+    if ! sudo certbot renew --cert-name "$domain" --dry-run >/dev/null 2>&1; then
+      need_migrate=1
+      warn "Cert exists but renewal dry-run failed for ${domain}; forcing Cloudflare re-issue to repair renewal config..."
+    fi
+  fi
+
+  # If cert exists AND no migration needed -> skip issuance
+  if [[ "$live_ok" -eq 1 && "$need_migrate" -eq 0 ]]; then
+    ok "Existing certificate found for ${domain} and renewal dry-run looks OK (skipping issuance)."
     return 0
   fi
 
-  log "Issuing Let's Encrypt certificate via Cloudflare DNS-01 for: ${domain}"
+  log "Issuing/Repairing Let's Encrypt certificate via Cloudflare DNS-01 for: ${domain}"
   sudo certbot certonly \
     --dns-cloudflare \
-    --dns-cloudflare-credentials /root/.secrets/cloudflare.ini \
+    --dns-cloudflare-credentials "/root/.secrets/cloudflare-${domain}.ini" \
     -d "$domain" \
     --cert-name "$domain" \
     --agree-tos -m "$email" \
@@ -408,7 +425,7 @@ EOF
 
   [[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" && -f "/etc/letsencrypt/live/${domain}/privkey.pem" ]] \
     || die "Certificate issuance failed (Cloudflare). Expected cert files not found for: ${domain}"
-  ok "Certificate issued for ${domain}"
+  ok "Certificate issued/repaired for ${domain}"
 }
 
 issue_cert_manual() {
@@ -518,6 +535,7 @@ reload_nginx_safe() {
 }
 
 ensure_certbot_renewal() {
+  local domain="$1"
   # Certbot can be installed via apt (certbot.timer) or snap (snap.certbot.renew.timer).
   local timer=""
   if systemctl list-unit-files 2>/dev/null | grep -qE '^[[:space:]]*certbot\.timer[[:space:]]'; then
@@ -541,7 +559,13 @@ ensure_certbot_renewal() {
     warn "No certbot systemd timer found (certbot.timer or snap.certbot.renew.timer)."
   fi
 
-  sudo certbot renew --dry-run || warn "certbot renew --dry-run failed (check certbot logs)."
+  if sudo certbot renew --cert-name "$domain" --dry-run; then
+    ok "certbot renew --dry-run (${domain}): OK"
+    CERTBOT_DRYRUN_OK=1
+  else
+    warn "certbot renew --dry-run (${domain}) failed (check /var/log/letsencrypt/letsencrypt.log)"
+    CERTBOT_DRYRUN_OK=0
+  fi
 }
 
 setup_https_nginx() {
@@ -569,7 +593,7 @@ setup_https_nginx() {
   reload_nginx_safe "$domain"
 
   if [[ "$mode" == "cloudflare" ]]; then
-    ensure_certbot_renewal
+    ensure_certbot_renewal "$domain"
   else
     warn "Manual mode: renewal is NOT automatic. Re-run certbot certonly --manual --preferred-challenges dns -d ${domain} before expiry."
   fi
@@ -1005,7 +1029,7 @@ cd "$DIR"
 cat > package.json << 'EOF'
 {
   "name": "node-socketio-chatroom",
-  "version": "1.1.9",
+  "version": "1.1.13",
   "main": "server.js",
   "scripts": { "start": "node server.js" },
   "dependencies": {
@@ -3995,9 +4019,16 @@ if [[ "${ENABLE_HTTPS:-0}" -eq 1 ]]; then
     echo "You must renew before expiry using:"
     echo "  sudo certbot certonly --manual --preferred-challenges dns -d ${DOMAIN_FQDN}"
   else
-    echo "Auto-renew: certbot timer should handle renewals."
-    echo "You can test with:"
-    echo "  sudo certbot renew --dry-run"
+    if [[ "${CERTBOT_DRYRUN_OK:-0}" -eq 1 ]]; then
+      echo "Auto-renew: certbot timer should handle renewals."
+      echo "You can test with:"
+      echo "  sudo certbot renew --dry-run"
+    else
+      echo "Auto-renew: WARNING — renewal dry-run failed."
+      echo "Fix Cloudflare token/permissions and check logs:"
+      echo "  sudo certbot renew --dry-run"
+      echo "  sudo tail -n 200 /var/log/letsencrypt/letsencrypt.log"
+    fi
   fi
 else
   echo "Access URL: http://$IP:$PORT"
