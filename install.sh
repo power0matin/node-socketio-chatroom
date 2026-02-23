@@ -3629,7 +3629,37 @@ const startPrivateChat = (targetUsername) => {
           safeLink
         };
       }
-    }).mount('#app');
+    });
+
+
+    function safeMount() {
+
+      const el = document.getElementById('app');
+
+      if (!el) {
+
+        console.error('[FATAL] #app not found. Vue cannot mount. Check public/index.html contains <div id="app">.');
+
+        return;
+
+      }
+
+      app.mount(el);
+
+    }
+
+
+
+    if (document.readyState === 'loading') {
+
+      document.addEventListener('DOMContentLoaded', safeMount, { once: true });
+
+    } else {
+
+      safeMount();
+
+    }
+
   </script>
 </body>
 
