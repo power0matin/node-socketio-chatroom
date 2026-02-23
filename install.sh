@@ -8,9 +8,53 @@ set -Eeuo pipefail
 cleanup() { true; }
 trap cleanup EXIT
 
-# ---- Installer metadata ----
-INSTALLER_VERSION="1.1.4"
-INSTALLER_BUILD_DATE="2026-02-22"
+# ---- Installer metadata (dynamic, auto-sync with GitHub) ----
+REPO_URL_DEFAULT="https://github.com/power0matin/node-socketio-chatroom.git"
+REPO_BRANCH_DEFAULT="main"
+
+# اگر بعداً خواستی از فورک/برنچ دیگر استفاده کنی فقط همین دو تا را عوض می‌کنی
+REPO_URL="${REPO_URL:-$REPO_URL_DEFAULT}"
+REPO_BRANCH="${REPO_BRANCH:-$REPO_BRANCH_DEFAULT}"
+
+repo_raw_base() {
+  # https://github.com/owner/repo(.git) -> https://raw.githubusercontent.com/owner/repo/<branch>
+  printf '%s' "$REPO_URL" \
+    | sed -E "s#^https?://github.com/([^/]+/[^/.]+)(\.git)?\$#https://raw.githubusercontent.com/\\1/${REPO_BRANCH}#"
+}
+
+fetch_installer_version() {
+  local raw pkg ver
+  raw="$(repo_raw_base)"
+  pkg="${raw}/package.json"
+
+  command -v curl >/dev/null 2>&1 || return 1
+
+  ver="$(curl -fsSL "$pkg" 2>/dev/null \
+    | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]\+\)".*/\1/p' \
+    | head -n1)"
+  [[ -n "$ver" ]] || return 1
+  printf '%s' "$ver"
+}
+
+fetch_installer_build_date() {
+  local raw inst lm d
+  raw="$(repo_raw_base)"
+  inst="${raw}/install.sh"
+
+  command -v curl >/dev/null 2>&1 || return 1
+
+  lm="$(curl -fsSI "$inst" 2>/dev/null | tr -d '\r' \
+    | awk -F': ' 'tolower($1)=="last-modified"{print $2}' | head -n1)"
+  [[ -n "$lm" ]] || return 1
+
+  # GNU date (روی Ubuntu/Debian اوکیه)
+  d="$(date -d "$lm" +%Y-%m-%d 2>/dev/null || true)"
+  [[ -n "$d" ]] || return 1
+  printf '%s' "$d"
+}
+
+INSTALLER_VERSION="$(fetch_installer_version || echo "unknown")"
+INSTALLER_BUILD_DATE="$(fetch_installer_build_date || date -u +%Y-%m-%d)"
 
 DIR_DEFAULT="$HOME/chat-node-socketio-chatroom"
 APP_NAME_DEFAULT="node-socketio-chatroom"
