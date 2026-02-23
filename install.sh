@@ -62,6 +62,25 @@ APP_NAME_DEFAULT="node-socketio-chatroom"
 need_apt_update=0
 
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
+find_npm_bin() {
+  local b=""
+  for p in /usr/bin/npm /usr/local/bin/npm /bin/npm; do
+    if [[ -x "$p" ]]; then b="$p"; break; fi
+  done
+  if [[ -z "$b" ]]; then b="$(command -v npm 2>/dev/null || true)"; fi
+  [[ -n "$b" ]] || die "npm not found."
+  printf '%s' "$b"
+}
+
+find_pm2_bin() {
+  local b=""
+  for p in /usr/bin/pm2 /usr/local/bin/pm2 /bin/pm2; do
+    if [[ -x "$p" ]]; then b="$p"; break; fi
+  done
+  if [[ -z "$b" ]]; then b="$(command -v pm2 2>/dev/null || true)"; fi
+  [[ -n "$b" ]] || die "pm2 not found."
+  printf '%s' "$b"
+}
 get_listener_pid() {
   local p="$1"
   local pid=""
@@ -402,19 +421,24 @@ if [[ -d "$DIR" && -f "$DIR/server.js" && -d "$DIR/data" ]]; then
 
     ok "Installing dependencies..."
     cd "$DIR"
-    "$NPM_BIN" config set fund false >/dev/null 2>&1 || true
-    "$NPM_BIN" config set audit false >/dev/null 2>&1 || true
+
+    # Find npm/pm2 locally (do not rely on global NPM_BIN/PM2_BIN here)
+    NPM_BIN_LOCAL="$(find_npm_bin)"
+    PM2_BIN_LOCAL="$(find_pm2_bin)"
+
+    "$NPM_BIN_LOCAL" config set fund false >/dev/null 2>&1 || true
+    "$NPM_BIN_LOCAL" config set audit false >/dev/null 2>&1 || true
     if [[ -f package-lock.json ]]; then
-      "$NPM_BIN" ci --omit=dev
+      "$NPM_BIN_LOCAL" ci --omit=dev
     else
-      "$NPM_BIN" install --omit=dev
+      "$NPM_BIN_LOCAL" install --omit=dev
     fi
 
     ok "Restarting PM2..."
     PM2_NAME="${APP_NAME_VAL}"
-    "$PM2_BIN" start server.js --name "$PM2_NAME" --update-env >/dev/null 2>&1 || true
-    "$PM2_BIN" restart "$PM2_NAME" --update-env
-    "$PM2_BIN" save
+    "$PM2_BIN_LOCAL" start server.js --name "$PM2_NAME" --update-env >/dev/null 2>&1 || true
+    "$PM2_BIN_LOCAL" restart "$PM2_NAME" --update-env
+    "$PM2_BIN_LOCAL" save
 
     ok "Update complete (data preserved)."
     exit 0
@@ -626,7 +650,7 @@ cd "$DIR"
 cat > package.json << 'EOF'
 {
   "name": "node-socketio-chatroom",
-  "version": "1.1.8",
+  "version": "1.1.9",
   "main": "server.js",
   "scripts": { "start": "node server.js" },
   "dependencies": {
