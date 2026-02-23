@@ -746,9 +746,21 @@ if [[ -d "$DIR" && -f "$DIR/server.js" && -d "$DIR/data" ]]; then
 
     ok "Restarting PM2..."
     PM2_NAME="${APP_NAME_VAL}"
-    "$PM2_BIN_LOCAL" start server.js --name "$PM2_NAME" --update-env >/dev/null 2>&1 || true
-    "$PM2_BIN_LOCAL" restart "$PM2_NAME" --update-env
+
+    # If process exists -> restart; otherwise -> start
+    if "$PM2_BIN_LOCAL" describe "$PM2_NAME" >/dev/null 2>&1; then
+      "$PM2_BIN_LOCAL" restart "$PM2_NAME" --update-env
+    else
+      "$PM2_BIN_LOCAL" start server.js --name "$PM2_NAME" --update-env
+    fi
     "$PM2_BIN_LOCAL" save
+
+    # ---- Optional: enable HTTPS via Nginx + Let's Encrypt (DNS-01) ----
+    if [[ "${ENABLE_HTTPS:-0}" -eq 1 ]]; then
+      log "Configuring HTTPS for: ${DOMAIN_FQDN} (mode: ${DNS_MODE})"
+      setup_https_nginx "$DOMAIN_FQDN" "$EMAIL" "$DNS_MODE" "${CF_API_TOKEN:-}" "$PORT"
+      ok "HTTPS configured for: https://${DOMAIN_FQDN}"
+    fi
 
     ok "Update complete (data preserved)."
     exit 0
@@ -833,9 +845,21 @@ if port_in_use "$PORT"; then
 
         ok "Restarting PM2..."
         PM2_NAME="${APP_NAME_VAL}"
-        "$PM2_BIN_LOCAL" start server.js --name "$PM2_NAME" --update-env >/dev/null 2>&1 || true
-        "$PM2_BIN_LOCAL" restart "$PM2_NAME" --update-env
+
+        # If process exists -> restart; otherwise -> start
+        if "$PM2_BIN_LOCAL" describe "$PM2_NAME" >/dev/null 2>&1; then
+          "$PM2_BIN_LOCAL" restart "$PM2_NAME" --update-env
+        else
+          "$PM2_BIN_LOCAL" start server.js --name "$PM2_NAME" --update-env
+        fi
         "$PM2_BIN_LOCAL" save
+
+        # ---- Optional: enable HTTPS via Nginx + Let's Encrypt (DNS-01) ----
+        if [[ "${ENABLE_HTTPS:-0}" -eq 1 ]]; then
+          log "Configuring HTTPS for: ${DOMAIN_FQDN} (mode: ${DNS_MODE})"
+          setup_https_nginx "$DOMAIN_FQDN" "$EMAIL" "$DNS_MODE" "${CF_API_TOKEN:-}" "$PORT"
+          ok "HTTPS configured for: https://${DOMAIN_FQDN}"
+        fi
 
         ok "Update complete (data preserved)."
         echo ""
