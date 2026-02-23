@@ -444,6 +444,7 @@ EOF
   sudo certbot certonly \
     --dns-cloudflare \
     --dns-cloudflare-credentials "/root/.secrets/cloudflare-${domain}.ini" \
+    --dns-cloudflare-propagation-seconds 60 \
     -d "$domain" \
     --cert-name "$domain" \
     --agree-tos -m "$email" \
