@@ -152,6 +152,36 @@ safe_rm_dir() {
   [[ "$dir" == "$HOME/"* ]] || return 1
   rm -rf -- "$dir"
 }
+merge_update_preserve_data() {
+  local dir="$1"
+
+  have_cmd rsync || die "rsync is required for safe update (not found)."
+  have_cmd curl  || die "curl is required for safe update (not found)."
+
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp" >/dev/null 2>&1 || true' RETURN
+
+  log "Downloading latest source (zip) ..."
+  local zip_url="https://codeload.github.com/power0matin/node-socketio-chatroom/zip/refs/heads/${REPO_BRANCH}"
+  curl -fsSL "$zip_url" -o "$tmp/repo.zip" || die "Failed to download repo zip."
+
+  apt_install_if_missing unzip unzip
+  unzip -q "$tmp/repo.zip" -d "$tmp" || die "Failed to unzip repo."
+
+  local extracted
+  extracted="$(find "$tmp" -maxdepth 1 -type d -name "node-socketio-chatroom-*" | head -n1 || true)"
+  [[ -n "$extracted" ]] || die "Could not find extracted repo folder."
+
+  log "Updating code but preserving data/ and public/uploads/ ..."
+  rsync -a --delete \
+    --exclude "data/" \
+    --exclude "public/uploads/" \
+    --exclude "node_modules/" \
+    "$extracted/" "$dir/"
+
+  ok "Code updated (data preserved)."
+}
 # ---- pretty logging (auto-disable colors if not a TTY) ----
 if [[ -t 1 ]]; then
   C_RESET=$'\033[0m'
@@ -346,6 +376,51 @@ prompt_password
 read -r -p "Port [default: 3000]: " INPUT_PORT
 PORT="${INPUT_PORT:-3000}"
 
+# If directory already has an installation but port is free (service stopped), still offer update/preserve flow
+if [[ -d "$DIR" && -f "$DIR/server.js" && -d "$DIR/data" ]]; then
+  warn "Existing installation directory detected: $DIR"
+  echo ""
+  echo "Do you want to DELETE ALL DATA? (users/messages/uploads/config)"
+  echo " - YES  => full reinstall (data will be removed)"
+  echo " - NO   => update code only (data will be preserved)"
+  echo ""
+
+  if confirm_yn_default_yes "Delete ALL DATA and reinstall from scratch?"; then
+    warn "User chose FULL WIPE."
+    warn "Creating tar backup..."
+    btar="$(make_backup_tar "$DIR" || true)"
+    [[ -n "$btar" ]] && ok "Backup created: $btar" || warn "Backup failed/skipped (continuing)."
+
+    warn "Removing old directory safely: $DIR"
+    safe_rm_dir "$DIR" || die "Refusing to delete unsafe path: $DIR"
+
+    ok "Old instance removed. Continuing FULL installation..."
+  else
+    warn "User chose PRESERVE DATA (safe update)."
+
+    merge_update_preserve_data "$DIR"
+
+    ok "Installing dependencies..."
+    cd "$DIR"
+    "$NPM_BIN" config set fund false >/dev/null 2>&1 || true
+    "$NPM_BIN" config set audit false >/dev/null 2>&1 || true
+    if [[ -f package-lock.json ]]; then
+      "$NPM_BIN" ci --omit=dev
+    else
+      "$NPM_BIN" install --omit=dev
+    fi
+
+    ok "Restarting PM2..."
+    PM2_NAME="${APP_NAME_VAL}"
+    "$PM2_BIN" start server.js --name "$PM2_NAME" --update-env >/dev/null 2>&1 || true
+    "$PM2_BIN" restart "$PM2_NAME" --update-env
+    "$PM2_BIN" save
+
+    ok "Update complete (data preserved)."
+    exit 0
+  fi
+fi
+
 # Validations
 [[ "$PORT" =~ ^[0-9]{1,5}$ ]] && (( PORT >= 1 && PORT <= 65535 )) || { die "Invalid port"; }
 
@@ -367,16 +442,16 @@ if port_in_use "$PORT"; then
     echo " - Remove old directory: $DIR"
     echo ""
 
-    if confirm_yn_default_yes "Replace existing installation and deploy NEW source to $DIR ?"; then
-      ok "User confirmed replace."
+    if confirm_yn_default_yes "Detected existing installation in $DIR. Continue and UPDATE it?"; then
+      ok "User confirmed update."
 
-      # 1) PM2 stop/delete (safe)
+      # 1) Stop PM2 process (safe)
       if have_cmd pm2; then
         warn "Stopping PM2 process (if exists): $APP_NAME_VAL"
-        pm2 delete "$APP_NAME_VAL" >/dev/null 2>&1 || true
+        pm2 stop "$APP_NAME_VAL" >/dev/null 2>&1 || true
       fi
 
-      # 2) kill listener PID (only because we already validated it's ours)
+      # 2) Stop listener PID (only because we already validated it's ours)
       new_pid="$(get_listener_pid "$PORT")"
       if [[ -n "$new_pid" && "$new_pid" != "$pid" ]]; then
         die "Listener PID changed (was $pid, now $new_pid). Refusing to kill for safety."
@@ -384,17 +459,50 @@ if port_in_use "$PORT"; then
       warn "Stopping listener on port $PORT (PID: $pid)"
       kill_listener_pid "$pid"
 
-      # 3) backup + safe delete
-      if [[ -d "$DIR" ]]; then
+      echo ""
+      echo "Existing installation detected."
+      echo "Do you want to DELETE ALL DATA? (users/messages/uploads/config)"
+      echo " - YES  => full reinstall (data will be removed)"
+      echo " - NO   => update code only (data will be preserved)"
+      echo ""
+
+      if confirm_yn_default_yes "Delete ALL DATA and reinstall from scratch?"; then
+        warn "User chose FULL WIPE."
         warn "Creating tar backup..."
         btar="$(make_backup_tar "$DIR" || true)"
         [[ -n "$btar" ]] && ok "Backup created: $btar" || warn "Backup failed/skipped (continuing)."
 
         warn "Removing old directory safely: $DIR"
         safe_rm_dir "$DIR" || die "Refusing to delete unsafe path: $DIR"
-      fi
 
-      ok "Old instance removed. Continuing installation..."
+        ok "Old instance removed. Continuing FULL installation..."
+      else
+        warn "User chose PRESERVE DATA (safe update)."
+
+        # Update code only, keep data/ and uploads
+        merge_update_preserve_data "$DIR"
+
+        ok "Installing dependencies..."
+        cd "$DIR"
+        "$NPM_BIN" config set fund false >/dev/null 2>&1 || true
+        "$NPM_BIN" config set audit false >/dev/null 2>&1 || true
+        if [[ -f package-lock.json ]]; then
+          "$NPM_BIN" ci --omit=dev
+        else
+          "$NPM_BIN" install --omit=dev
+        fi
+
+        ok "Restarting PM2..."
+        PM2_NAME="${APP_NAME_VAL}"
+        "$PM2_BIN" start server.js --name "$PM2_NAME" --update-env >/dev/null 2>&1 || true
+        "$PM2_BIN" restart "$PM2_NAME" --update-env
+        "$PM2_BIN" save
+
+        ok "Update complete (data preserved)."
+        echo ""
+        ok "Done. You can refresh the browser."
+        exit 0
+      fi
     else
       die "Canceled by user. Please choose another port or stop the conflicting service."
     fi
@@ -518,7 +626,7 @@ cd "$DIR"
 cat > package.json << 'EOF'
 {
   "name": "node-socketio-chatroom",
-  "version": "1.1.6",
+  "version": "1.1.8",
   "main": "server.js",
   "scripts": { "start": "node server.js" },
   "dependencies": {
