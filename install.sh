@@ -153,6 +153,39 @@ confirm_yn_default_yes() {
   [[ "$ans" =~ ^[Yy]$ ]]
 }
 
+# ---- HTTPS helpers ----
+validate_fqdn() {
+  # basic FQDN validation (labels 1-63, total <=253, must contain at least one dot)
+  local d="${1:-}"
+  [[ -n "$d" ]] || return 1
+  [[ "$d" != *".."* ]] || return 1
+  [[ "$d" == *.* ]] || return 1
+  [[ ${#d} -le 253 ]] || return 1
+  [[ "$d" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$ ]] || return 1
+  return 0
+}
+
+validate_email_loose() {
+  local e="${1:-}"
+  [[ -n "$e" ]] || return 1
+  [[ "$e" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]] || return 1
+  return 0
+}
+
+read_secret() {
+  # read secret from TTY (hidden input)
+  local prompt="$1"
+  local outvar="$2"
+  local v=""
+  while true; do
+    read -r -s -p "$prompt: " v
+    echo ""
+    [[ -n "$v" ]] && break
+    echo "Value cannot be empty. Try again."
+  done
+  printf -v "$outvar" '%s' "$v"
+}
+
 make_backup_tar() {
   local dir="$1"
   [[ -d "$dir" ]] || return 0
@@ -312,6 +345,220 @@ apt_install_if_missing() {
   fi
 }
 
+# ---- HTTPS (Nginx + Certbot DNS-01) ----
+ensure_nginx_installed() {
+  apt_install_if_missing nginx nginx
+  sudo systemctl enable --now nginx >/dev/null 2>&1 || true
+
+  # If nginx config is already broken, do NOT attempt cleanup.
+  local out=""
+  if ! out="$(sudo nginx -t 2>&1)"; then
+    echo "$out"
+    die "Nginx config test failed. Please fix existing Nginx configuration and re-run the installer."
+  fi
+  ok "Nginx: running and config OK"
+}
+
+ensure_certbot_installed() {
+  apt_install_if_missing certbot certbot
+  # optional plugin (not required, but requested as optional)
+  apt_install_if_missing python3-certbot-nginx python3-certbot-nginx || true
+}
+
+issue_cert_cloudflare() {
+  local domain="$1"
+  local email="$2"
+  local token="$3"
+
+  apt_install_if_missing python3-certbot-dns-cloudflare python3-certbot-dns-cloudflare
+
+  sudo mkdir -p /root/.secrets
+  sudo chmod 700 /root/.secrets
+
+  local tmp
+  tmp="$(mktemp)"
+  cat > "$tmp" <<EOF
+dns_cloudflare_api_token = ${token}
+EOF
+  sudo mv "$tmp" /root/.secrets/cloudflare.ini
+  sudo chmod 600 /root/.secrets/cloudflare.ini
+
+  # idempotent-ish: if cert exists, skip issuance
+  if [[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" && -f "/etc/letsencrypt/live/${domain}/privkey.pem" ]]; then
+    ok "Existing certificate found for ${domain} (skipping issuance)."
+    return 0
+  fi
+
+  log "Issuing Let's Encrypt certificate via Cloudflare DNS-01 for: ${domain}"
+  sudo certbot certonly \
+    --dns-cloudflare \
+    --dns-cloudflare-credentials /root/.secrets/cloudflare.ini \
+    -d "$domain" \
+    --agree-tos -m "$email" \
+    --non-interactive
+
+  [[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" && -f "/etc/letsencrypt/live/${domain}/privkey.pem" ]] \
+    || die "Certificate issuance failed (Cloudflare). Expected cert files not found for: ${domain}"
+  ok "Certificate issued for ${domain}"
+}
+
+issue_cert_manual() {
+  local domain="$1"
+
+  if [[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" && -f "/etc/letsencrypt/live/${domain}/privkey.pem" ]]; then
+    ok "Existing certificate found for ${domain} (skipping issuance)."
+    return 0
+  fi
+
+  warn "Manual DNS-01 cert issuance will prompt you to create a TXT record."
+  warn "After you add the TXT record in Cloudflare DNS, wait for propagation, then continue in certbot."
+  sudo certbot certonly --manual --preferred-challenges dns -d "$domain"
+
+  [[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" && -f "/etc/letsencrypt/live/${domain}/privkey.pem" ]] \
+    || die "Certificate issuance failed (manual). Expected cert files not found for: ${domain}"
+  ok "Certificate issued for ${domain}"
+}
+
+write_nginx_site_conf() {
+  local domain="$1"
+  local port="$2"
+  local conf="/etc/nginx/sites-available/${domain}"
+
+  sudo tee "$conf" >/dev/null <<EOF
+server {
+  listen 80;
+  server_name ${domain};
+  return 301 https://\$host\$request_uri;
+}
+
+server {
+  listen 443 ssl http2;
+  server_name ${domain};
+
+  ssl_certificate /etc/letsencrypt/live/${domain}/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/${domain}/privkey.pem;
+
+  location / {
+    proxy_pass http://127.0.0.1:${port};
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade \$http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_read_timeout 3600;
+    proxy_send_timeout 3600;
+  }
+}
+EOF
+  ok "Wrote Nginx site config: ${conf}"
+}
+
+enable_nginx_site() {
+  local domain="$1"
+  local conf="/etc/nginx/sites-available/${domain}"
+  local link="/etc/nginx/sites-enabled/${domain}"
+
+  [[ -f "$conf" ]] || die "Nginx site config not found: $conf"
+
+  if [[ -L "$link" || -e "$link" ]]; then
+    ok "Nginx site already enabled: ${domain}"
+  else
+    sudo ln -s "$conf" "$link"
+    ok "Enabled Nginx site: ${domain}"
+  fi
+
+  # Only disable default site after nginx config passes
+  local out=""
+  if ! out="$(sudo nginx -t 2>&1)"; then
+    echo "$out"
+    die "Nginx config test failed after enabling site. Aborting (no destructive cleanup)."
+  fi
+
+  if [[ -L /etc/nginx/sites-enabled/default ]]; then
+    sudo rm -f /etc/nginx/sites-enabled/default
+    ok "Disabled default Nginx site symlink"
+  fi
+}
+
+reload_nginx_safe() {
+  local domain="$1"
+
+  local out=""
+  if ! out="$(sudo nginx -t 2>&1)"; then
+    echo "$out"
+    die "Nginx config test failed. Not reloading."
+  fi
+
+  sudo systemctl reload nginx
+  ok "Nginx reloaded"
+
+  if ss -lntp 2>/dev/null | grep -q ':443'; then
+    ok "Port 443: listening"
+  else
+    warn "Port 443 not detected as listening (ss output did not match)."
+  fi
+
+  # Local TLS validation with Host header; -k to ignore cert verify (IP mismatch)
+  if have_cmd curl; then
+    curl -Ik -k https://127.0.0.1 -H "Host: ${domain}" >/dev/null 2>&1 \
+      && ok "Local TLS check: OK (https://127.0.0.1 with Host=${domain})" \
+      || warn "Local TLS check failed (curl)."
+  fi
+}
+
+ensure_certbot_renewal() {
+  # Certbot on Ubuntu typically uses systemd timer.
+  if systemctl list-unit-files 2>/dev/null | grep -q '^certbot\.timer'; then
+    if ! systemctl is-enabled certbot.timer >/dev/null 2>&1; then
+      sudo systemctl enable certbot.timer >/dev/null 2>&1 || true
+    fi
+    sudo systemctl start certbot.timer >/dev/null 2>&1 || true
+
+    if systemctl is-active certbot.timer >/dev/null 2>&1; then
+      ok "certbot.timer: active"
+    else
+      warn "certbot.timer is not active. You may need to enable/start it manually."
+    fi
+  else
+    warn "certbot.timer not found (this system may schedule renew differently)."
+  fi
+
+  sudo certbot renew --dry-run || warn "certbot renew --dry-run failed (check certbot logs)."
+}
+
+setup_https_nginx() {
+  local domain="$1"
+  local email="$2"
+  local mode="$3"
+  local token="$4"
+  local port="$5"
+
+  [[ -n "$domain" ]] || die "setup_https_nginx: domain is empty"
+  [[ -n "$email" ]] || die "setup_https_nginx: email is empty"
+
+  ensure_nginx_installed
+  ensure_certbot_installed
+
+  if [[ "$mode" == "cloudflare" ]]; then
+    [[ -n "$token" ]] || die "Cloudflare mode selected but API token is empty."
+    issue_cert_cloudflare "$domain" "$email" "$token"
+  else
+    issue_cert_manual "$domain"
+  fi
+
+  write_nginx_site_conf "$domain" "$port"
+  enable_nginx_site "$domain"
+  reload_nginx_safe "$domain"
+
+  if [[ "$mode" == "cloudflare" ]]; then
+    ensure_certbot_renewal
+  else
+    warn "Manual mode: renewal is NOT automatic. Re-run certbot certonly --manual --preferred-challenges dns -d ${domain} before expiry."
+  fi
+}
+
 echo "${C_BOLD}========================================${C_RESET}"
 echo "${C_BOLD}  node-socketio-chatroom Installer${C_RESET} ${C_DIM}v${INSTALLER_VERSION} (${INSTALLER_BUILD_DATE})${C_RESET}"
 echo "${C_BOLD}========================================${C_RESET}"
@@ -394,6 +641,69 @@ prompt_password
 
 read -r -p "Port [default: 3000]: " INPUT_PORT
 PORT="${INPUT_PORT:-3000}"
+
+# ---- HTTPS (Nginx + Let's Encrypt) questions (DNS-01 only) ----
+ENABLE_HTTPS=1
+if confirm_yn_default_yes "Enable HTTPS now?"; then
+  ENABLE_HTTPS=1
+else
+  ENABLE_HTTPS=0
+fi
+
+DOMAIN_FQDN=""
+EMAIL=""
+DNS_MODE=""
+CF_API_TOKEN=""
+CF_ZONE_NAME=""
+
+if [[ "$ENABLE_HTTPS" -eq 1 ]]; then
+  while true; do
+    read -r -p "DOMAIN_FQDN (e.g. nitrochat.hypersentry.shop): " DOMAIN_FQDN
+    DOMAIN_FQDN="${DOMAIN_FQDN,,}"
+    if validate_fqdn "$DOMAIN_FQDN"; then
+      break
+    fi
+    echo "Invalid FQDN format. Try again."
+  done
+
+  while true; do
+    read -r -p "Let's Encrypt Email (for expiry/security notices): " EMAIL
+    EMAIL="${EMAIL,,}"
+    if validate_email_loose "$EMAIL"; then
+      break
+    fi
+    echo "Invalid email. Try again."
+  done
+
+  echo ""
+  echo "DNS-01 Validation Mode (HTTP-01 is NOT used). Choose one:"
+  echo "1) Auto Cloudflare DNS mode (recommended, auto-renewing)"
+  echo "2) Manual DNS mode (NOT auto-renewing; you must renew manually)"
+  read -r -p "Enter number [1-2]: " DNS_CHOICE
+
+  case "${DNS_CHOICE:-1}" in
+    1)
+      DNS_MODE="cloudflare"
+      echo ""
+      echo "Cloudflare API token needs permission: Zone:DNS:Edit (scoped to the zone)."
+      read_secret "Cloudflare API Token (hidden input)" CF_API_TOKEN
+      read -r -p "Cloudflare Zone Name (e.g. hypersentry.shop) [leave empty to auto-detect]: " CF_ZONE_NAME
+      CF_ZONE_NAME="${CF_ZONE_NAME,,}"
+      ;;
+    2)
+      DNS_MODE="manual"
+      warn "Manual DNS mode selected. Renewal will be MANUAL (no automatic renew)."
+      ;;
+    *)
+      DNS_MODE="cloudflare"
+      echo ""
+      echo "Cloudflare API token needs permission: Zone:DNS:Edit (scoped to the zone)."
+      read_secret "Cloudflare API Token (hidden input)" CF_API_TOKEN
+      read -r -p "Cloudflare Zone Name (e.g. hypersentry.shop) [leave empty to auto-detect]: " CF_ZONE_NAME
+      CF_ZONE_NAME="${CF_ZONE_NAME,,}"
+      ;;
+  esac
+fi
 
 # If directory already has an installation but port is free (service stopped), still offer update/preserve flow
 if [[ -d "$DIR" && -f "$DIR/server.js" && -d "$DIR/data" ]]; then
@@ -3343,6 +3653,13 @@ PM2_NAME="${APP_NAME_VAL}"
 PORT="$PORT" "$PM2_BIN" start server.js --name "$PM2_NAME"
 "$PM2_BIN" save
 
+# ---- Optional: enable HTTPS via Nginx + Let's Encrypt (DNS-01) ----
+if [[ "${ENABLE_HTTPS:-0}" -eq 1 ]]; then
+  log "Configuring HTTPS for: ${DOMAIN_FQDN} (mode: ${DNS_MODE})"
+  setup_https_nginx "$DOMAIN_FQDN" "$EMAIL" "$DNS_MODE" "${CF_API_TOKEN:-}" "$PORT"
+  ok "HTTPS configured for: https://${DOMAIN_FQDN}"
+fi
+
 echo "Creating management tool..."
 
 cat << 'EOF_MENU' > /tmp/node-socketio-chatroom-menu.sh
@@ -3624,8 +3941,28 @@ echo "Your Admin Credentials:"
 echo "User: $ADMIN_USER"
 echo "Pass: stored hashed in config.json (password will not be shown again)"
 echo ""
+
 IP="$(curl -fsS https://api.ipify.org 2>/dev/null || curl -fsS https://ifconfig.co 2>/dev/null || echo 'YOUR_SERVER_IP')"
-echo "Access URL: http://$IP:$PORT"
+
+if [[ "${ENABLE_HTTPS:-0}" -eq 1 ]]; then
+  echo "Access URL (HTTPS): https://${DOMAIN_FQDN}"
+  echo ""
+  echo "Nginx is reverse-proxying to: http://127.0.0.1:${PORT} (WebSocket enabled)"
+  echo "HTTP -> HTTPS redirect: enabled"
+  echo ""
+  if [[ "${DNS_MODE:-}" == "manual" ]]; then
+    echo "NOTE: Manual DNS mode = renewal is MANUAL (no auto-renew)."
+    echo "You must renew before expiry using:"
+    echo "  sudo certbot certonly --manual --preferred-challenges dns -d ${DOMAIN_FQDN}"
+  else
+    echo "Auto-renew: certbot timer should handle renewals."
+    echo "You can test with:"
+    echo "  sudo certbot renew --dry-run"
+  fi
+else
+  echo "Access URL: http://$IP:$PORT"
+fi
+
 echo ""
 echo "Type 'node-socketio-chatroom' in terminal to manage your server."
 echo "========================================"
