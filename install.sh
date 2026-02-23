@@ -3077,14 +3077,14 @@ const startPrivateChat = (targetUsername) => {
           showSidebar, toggleCreateChannel, showCreateChannelInput, newChannelName, createChannel, deleteChannel,
           replyingTo, setReply, cancelReply, deleteMessage,
           contextMenu, showContext, showUserContext,
-          swipeId, touchStart, touchMove, touchEnd, getSwipeStyle,
+          swipeId, swipeOffset, touchStart, touchMove, touchEnd, getSwipeStyle,
           isRecording, isUploading, uploadProgress, toggleRecording, viewImage, lightboxImage, autoResize, scrollToMessage,
           canCreateChannel, canBan, banUser, unbanUser, setRole,
           showBanModal, openBanList, bannedUsers, unreadCounts, appName,
           showAdminSettings, adminSettings, saveAdminSettings, uploadToken,
           isConnected, isAuthBusy, canSend, handleComposerKeydown, showScrollDown, scrollToBottom,
           // saved
-          openSavedView, unsave,
+          openSavedView, unsave, saveThisMessage,
           // access UI
           showAccessModal, accessModalUser, accessChannels, accessMap, openAccessModal, toggleUserAccess, refreshAccessModal,
           accessDeniedBanner,
