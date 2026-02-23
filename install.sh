@@ -3031,10 +3031,9 @@ cat > public/index.html << 'EOF'
     const { createApp, ref, onMounted, nextTick, computed } = Vue;
     const socket = io();
 
-    const notifyAudio = new Audio('data:audio/mp3;base64,//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq');
-    const app = createApp({
+    const notifyAudio = new Audio('data:audio/mp3;base64,...');
 
-    createApp({
+    const app = createApp({
       setup() {
         const isLoggedIn = ref(false);
         const user = ref({ username: '', role: 'user' });
