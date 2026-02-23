@@ -263,8 +263,6 @@ apt_install_if_missing() {
   fi
 }
 
-resolve_installer_meta
-
 echo "${C_BOLD}========================================${C_RESET}"
 echo "${C_BOLD}  node-socketio-chatroom Installer${C_RESET} ${C_DIM}v${INSTALLER_VERSION} (${INSTALLER_BUILD_DATE})${C_RESET}"
 echo "${C_BOLD}========================================${C_RESET}"
