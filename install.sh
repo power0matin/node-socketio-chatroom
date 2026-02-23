@@ -508,19 +508,24 @@ if port_in_use "$PORT"; then
 
         ok "Installing dependencies..."
         cd "$DIR"
-        "$NPM_BIN" config set fund false >/dev/null 2>&1 || true
-        "$NPM_BIN" config set audit false >/dev/null 2>&1 || true
+
+        # Find npm/pm2 locally (do not rely on global NPM_BIN/PM2_BIN here)
+        NPM_BIN_LOCAL="$(find_npm_bin)"
+        PM2_BIN_LOCAL="$(find_pm2_bin)"
+
+        "$NPM_BIN_LOCAL" config set fund false >/dev/null 2>&1 || true
+        "$NPM_BIN_LOCAL" config set audit false >/dev/null 2>&1 || true
         if [[ -f package-lock.json ]]; then
-          "$NPM_BIN" ci --omit=dev
+          "$NPM_BIN_LOCAL" ci --omit=dev
         else
-          "$NPM_BIN" install --omit=dev
+          "$NPM_BIN_LOCAL" install --omit=dev
         fi
 
         ok "Restarting PM2..."
         PM2_NAME="${APP_NAME_VAL}"
-        "$PM2_BIN" start server.js --name "$PM2_NAME" --update-env >/dev/null 2>&1 || true
-        "$PM2_BIN" restart "$PM2_NAME" --update-env
-        "$PM2_BIN" save
+        "$PM2_BIN_LOCAL" start server.js --name "$PM2_NAME" --update-env >/dev/null 2>&1 || true
+        "$PM2_BIN_LOCAL" restart "$PM2_NAME" --update-env
+        "$PM2_BIN_LOCAL" save
 
         ok "Update complete (data preserved)."
         echo ""
