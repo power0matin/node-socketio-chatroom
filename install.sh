@@ -18,7 +18,96 @@ APP_NAME_DEFAULT="node-socketio-chatroom"
 need_apt_update=0
 
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
+get_listener_pid() {
+  local p="$1"
+  local pid=""
 
+  if have_cmd ss; then
+    # نمونه خروجی: users:(("node",pid=1234,fd=21))
+    pid="$(ss -lptn "( sport = :$p )" 2>/dev/null \
+      | sed -n 's/.*pid=\([0-9]\+\).*/\1/p' \
+      | head -n1 || true)"
+  fi
+
+  if [[ -z "$pid" ]] && have_cmd lsof; then
+    pid="$(lsof -tiTCP:"$p" -sTCP:LISTEN -n -P 2>/dev/null | head -n1 || true)"
+  fi
+
+  if [[ -z "$pid" ]] && have_cmd netstat; then
+    # netstat format: ... LISTEN  pid/program
+    pid="$(netstat -lntp 2>/dev/null \
+      | awk -v port=":$p" '$4 ~ port && $6=="LISTEN" {print $7}' \
+      | sed -n 's/^\([0-9]\+\)\/.*/\1/p' \
+      | head -n1 || true)"
+  fi
+
+  echo "$pid"
+}
+
+pid_cmdline() {
+  local pid="$1"
+  [[ -n "$pid" ]] || return 1
+  ps -p "$pid" -o args= 2>/dev/null || true
+}
+
+# تشخیص اینکه پردازش روی پورت، مربوط به همین نصب است یا نه
+is_our_listener() {
+  local pid="$1"
+  local dir="$2"
+  [[ -n "$pid" ]] || return 1
+
+  local cmd
+  cmd="$(pid_cmdline "$pid")"
+  [[ -n "$cmd" ]] || return 1
+
+  # must be a node process
+  echo "$cmd" | grep -qiE '(^|[[:space:]])node([[:space:]]|$)' || return 1
+
+  # must reference EXACT project server.js
+  echo "$cmd" | grep -qF "$dir/server.js" || return 1
+
+  return 0
+}
+
+
+kill_listener_pid() {
+  local pid="$1"
+  [[ -n "$pid" ]] || return 0
+
+  # اول graceful
+  kill -TERM "$pid" >/dev/null 2>&1 || true
+  sleep 1
+  if kill -0 "$pid" >/dev/null 2>&1; then
+    kill -KILL "$pid" >/dev/null 2>&1 || true
+  fi
+}
+
+confirm_yn_default_yes() {
+  local prompt="$1"
+  local ans=""
+  read -r -p "$prompt [Y/n]: " ans
+  ans="${ans:-Y}"
+  [[ "$ans" =~ ^[Yy]$ ]]
+}
+
+make_backup_tar() {
+  local dir="$1"
+  [[ -d "$dir" ]] || return 0
+  local ts; ts="$(date +%Y%m%d-%H%M%S)"
+  local out="${dir}.backup-${ts}.tar.gz"
+  tar -czf "$out" -C "$(dirname "$dir")" "$(basename "$dir")" >/dev/null 2>&1 || true
+  [[ -f "$out" ]] && echo "$out" || true
+}
+
+safe_rm_dir() {
+  local dir="$1"
+  # محافظت: حذف فقط زیر $HOME
+  case "$dir" in
+    "$HOME"|"$HOME/"|"/"|"") return 1 ;;
+  esac
+  [[ "$dir" == "$HOME/"* ]] || return 1
+  rm -rf -- "$dir"
+}
 # ---- pretty logging (auto-disable colors if not a TTY) ----
 if [[ -t 1 ]]; then
   C_RESET=$'\033[0m'
@@ -207,7 +296,57 @@ PORT="${INPUT_PORT:-3000}"
 [[ "$PORT" =~ ^[0-9]{1,5}$ ]] && (( PORT >= 1 && PORT <= 65535 )) || { die "Invalid port"; }
 
 if port_in_use "$PORT"; then
-  die "Port $PORT is already in use. Choose another port or stop the conflicting service."
+  pid="$(get_listener_pid "$PORT")"
+  cmd="$(pid_cmdline "$pid")"
+
+  warn "Port $PORT is already in use."
+  [[ -n "$pid" ]] && warn "Listener PID: $pid"
+  [[ -n "$cmd" ]] && warn "Listener CMD: $cmd"
+
+    # تشخیص "مال ما" (فقط اگر cmdline دقیقاً شامل "$DIR/server.js" باشد)
+    if [[ -n "$pid" ]] && is_our_listener "$pid" "$DIR"; then
+    warn "It looks like this port is used by an existing instance of this chatroom in: $DIR"
+    echo "Replace will:"
+    echo " - Stop PM2 process (if exists): $APP_NAME_VAL"
+    echo " - Stop listener on port: $PORT"
+    echo " - Backup directory as: $DIR.backup-*.tar.gz"
+    echo " - Remove old directory: $DIR"
+    echo ""
+
+    if confirm_yn_default_yes "Replace existing installation and deploy NEW source to $DIR ?"; then
+      ok "User confirmed replace."
+
+      # 1) PM2 stop/delete (safe)
+      if have_cmd pm2; then
+        warn "Stopping PM2 process (if exists): $APP_NAME_VAL"
+        pm2 delete "$APP_NAME_VAL" >/dev/null 2>&1 || true
+      fi
+
+      # 2) kill listener PID (only because we already validated it's ours)
+      new_pid="$(get_listener_pid "$PORT")"
+      if [[ -n "$new_pid" && "$new_pid" != "$pid" ]]; then
+        die "Listener PID changed (was $pid, now $new_pid). Refusing to kill for safety."
+      fi
+      warn "Stopping listener on port $PORT (PID: $pid)"
+      kill_listener_pid "$pid"
+
+      # 3) backup + safe delete
+      if [[ -d "$DIR" ]]; then
+        warn "Creating tar backup..."
+        btar="$(make_backup_tar "$DIR" || true)"
+        [[ -n "$btar" ]] && ok "Backup created: $btar" || warn "Backup failed/skipped (continuing)."
+
+        warn "Removing old directory safely: $DIR"
+        safe_rm_dir "$DIR" || die "Refusing to delete unsafe path: $DIR"
+      fi
+
+      ok "Old instance removed. Continuing installation..."
+    else
+      die "Canceled by user. Please choose another port or stop the conflicting service."
+    fi
+  else
+    die "Port $PORT is already in use by another service. Choose another port or stop the conflicting service."
+  fi
 else
   ok "Port $PORT is free"
 fi
