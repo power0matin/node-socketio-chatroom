@@ -82,6 +82,33 @@ find_pm2_bin() {
   [[ -n "$b" ]] || die "pm2 not found."
   printf '%s' "$b"
 }
+detect_app_entry() {
+  local dir="$1"
+
+  # 1) classic root server.js
+  if [[ -f "$dir/server.js" ]]; then
+    echo "$dir/server.js"
+    return 0
+  fi
+
+  # 2) new repo layout: src/server.js
+  if [[ -f "$dir/src/server.js" ]]; then
+    echo "$dir/src/server.js"
+    return 0
+  fi
+
+  # 3) package.json "main"
+  if [[ -f "$dir/package.json" ]]; then
+    local main
+    main="$(node -e "const p=require('${dir}/package.json');process.stdout.write(p.main||'')" 2>/dev/null || true)"
+    if [[ -n "$main" && -f "$dir/$main" ]]; then
+      echo "$dir/$main"
+      return 0
+    fi
+  fi
+
+  return 1
+}
 get_listener_pid() {
   local p="$1"
   local pid=""
@@ -127,8 +154,8 @@ is_our_listener() {
   # must be a node process
   echo "$cmd" | grep -qiE '(^|[[:space:]])node([[:space:]]|$)' || return 1
 
-  # must reference EXACT project server.js
-  echo "$cmd" | grep -qF "$dir/server.js" || return 1
+  # must reference project entry (root server.js or src/server.js)
+  echo "$cmd" | grep -qE "$(printf '%s' "$dir" | sed 's/[.[\()*^$+?{|]/\\&/g')/(server\.js|src/server\.js)" || return 1
 
   return 0
 }
@@ -788,11 +815,14 @@ if [[ -d "$DIR" && -f "$DIR/server.js" && -d "$DIR/data" ]]; then
     PM2_NAME="${APP_NAME_VAL}"
 
     # If process exists -> restart; otherwise -> start
-    if "$PM2_BIN_LOCAL" describe "$PM2_NAME" >/dev/null 2>&1; then
-      "$PM2_BIN_LOCAL" restart "$PM2_NAME" --update-env
-    else
-      "$PM2_BIN_LOCAL" start server.js --name "$PM2_NAME" --update-env
-    fi
+    ok "Restarting PM2..."
+    PM2_NAME="${APP_NAME_VAL}"
+
+    APP_ENTRY="$(detect_app_entry "$DIR")" || die "Could not find app entrypoint (server.js or src/server.js)."
+
+    # IMPORTANT: restart does NOT change script path; delete+start does.
+    "$PM2_BIN_LOCAL" delete "$PM2_NAME" >/dev/null 2>&1 || true
+    "$PM2_BIN_LOCAL" start "$APP_ENTRY" --name "$PM2_NAME" --update-env --cwd "$DIR"
     "$PM2_BIN_LOCAL" save
 
     # ---- Optional: enable HTTPS via Nginx + Let's Encrypt (DNS-01) ----
@@ -1029,7 +1059,7 @@ cd "$DIR"
 cat > package.json << 'EOF'
 {
   "name": "node-socketio-chatroom",
-  "version": "1.1.13",
+  "version": "1.1.14",
   "main": "server.js",
   "scripts": { "start": "node server.js" },
   "dependencies": {
