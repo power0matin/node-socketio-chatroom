@@ -3032,6 +3032,7 @@ cat > public/index.html << 'EOF'
     const socket = io();
 
     const notifyAudio = new Audio('data:audio/mp3;base64,//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq');
+    const app = createApp({
 
     createApp({
       setup() {
@@ -3633,33 +3634,19 @@ const startPrivateChat = (targetUsername) => {
 
 
     function safeMount() {
-
       const el = document.getElementById('app');
-
       if (!el) {
-
-        console.error('[FATAL] #app not found. Vue cannot mount. Check public/index.html contains <div id="app">.');
-
+        console.error('[FATAL] #app not found. Vue cannot mount.');
         return;
-
       }
-
       app.mount(el);
-
     }
-
-
 
     if (document.readyState === 'loading') {
-
       document.addEventListener('DOMContentLoaded', safeMount, { once: true });
-
     } else {
-
       safeMount();
-
     }
-
   </script>
 </body>
 
