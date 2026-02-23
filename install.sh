@@ -773,7 +773,7 @@ if [[ "$ENABLE_HTTPS" -eq 1 ]]; then
 fi
 
 # If directory already has an installation but port is free (service stopped), still offer update/preserve flow
-if [[ -d "$DIR" && -f "$DIR/server.js" && -d "$DIR/data" ]]; then
+if [[ -d "$DIR" && -d "$DIR/data" ]] && detect_app_entry "$DIR" >/dev/null 2>&1; then
   warn "Existing installation directory detected: $DIR"
   echo ""
   echo "Do you want to DELETE ALL DATA? (users/messages/uploads/config)"
@@ -811,16 +811,13 @@ if [[ -d "$DIR" && -f "$DIR/server.js" && -d "$DIR/data" ]]; then
       "$NPM_BIN_LOCAL" install --omit=dev
     fi
 
-    ok "Restarting PM2..."
-    PM2_NAME="${APP_NAME_VAL}"
-
     # If process exists -> restart; otherwise -> start
     ok "Restarting PM2..."
     PM2_NAME="${APP_NAME_VAL}"
 
-    APP_ENTRY="$(detect_app_entry "$DIR")" || die "Could not find app entrypoint (server.js or src/server.js)."
+    APP_ENTRY="$(detect_app_entry "$DIR")" || die "Could not find app entrypoint (server.js or src/server.js or package.json main)."
 
-    # IMPORTANT: restart does NOT change script path; delete+start does.
+    # restart does NOT change script path; delete+start does.
     "$PM2_BIN_LOCAL" delete "$PM2_NAME" >/dev/null 2>&1 || true
     "$PM2_BIN_LOCAL" start "$APP_ENTRY" --name "$PM2_NAME" --update-env --cwd "$DIR"
     "$PM2_BIN_LOCAL" save
@@ -848,7 +845,7 @@ if port_in_use "$PORT"; then
   [[ -n "$pid" ]] && warn "Listener PID: $pid"
   [[ -n "$cmd" ]] && warn "Listener CMD: $cmd"
 
-    # تشخیص "مال ما" (فقط اگر cmdline دقیقاً شامل "$DIR/server.js" باشد)
+    # تشخیص "مال ما" (اگر cmdline شامل entrypoint این پروژه باشد: server.js یا src/server.js)
     if [[ -n "$pid" ]] && is_our_listener "$pid" "$DIR"; then
     warn "It looks like this port is used by an existing instance of this chatroom in: $DIR"
     echo "Replace will:"
@@ -916,12 +913,11 @@ if port_in_use "$PORT"; then
         ok "Restarting PM2..."
         PM2_NAME="${APP_NAME_VAL}"
 
-        # If process exists -> restart; otherwise -> start
-        if "$PM2_BIN_LOCAL" describe "$PM2_NAME" >/dev/null 2>&1; then
-          "$PM2_BIN_LOCAL" restart "$PM2_NAME" --update-env
-        else
-          "$PM2_BIN_LOCAL" start server.js --name "$PM2_NAME" --update-env
-        fi
+        APP_ENTRY="$(detect_app_entry "$DIR")" || die "Could not find app entrypoint (server.js or src/server.js or package.json main)."
+
+        # restart does NOT change script path; delete+start does.
+        "$PM2_BIN_LOCAL" delete "$PM2_NAME" >/dev/null 2>&1 || true
+        "$PM2_BIN_LOCAL" start "$APP_ENTRY" --name "$PM2_NAME" --update-env --cwd "$DIR"
         "$PM2_BIN_LOCAL" save
 
         # ---- Optional: enable HTTPS via Nginx + Let's Encrypt (DNS-01) ----
@@ -1059,7 +1055,7 @@ cd "$DIR"
 cat > package.json << 'EOF'
 {
   "name": "node-socketio-chatroom",
-  "version": "1.1.14",
+  "version": "1.1.16",
   "main": "server.js",
   "scripts": { "start": "node server.js" },
   "dependencies": {
@@ -3720,9 +3716,11 @@ cat > data/config.json <<EOF
 EOF
 chmod 600 data/config.json
 
+APP_ENTRY="$(detect_app_entry "$DIR")" || die "Install incomplete: cannot locate app entrypoint."
+
 REQ_FILES=(
   "$DIR/package.json"
-  "$DIR/server.js"
+  "$APP_ENTRY"
   "$DIR/public/index.html"
   "$DIR/data/config.json"
 )
@@ -3743,8 +3741,9 @@ fi
 unset ADMIN_PASS
 echo "[6/6] Starting server with PM2..."
 PM2_NAME="${APP_NAME_VAL}"
+APP_ENTRY="$(detect_app_entry "$DIR")" || die "Could not find app entrypoint after install."
 "$PM2_BIN" delete "$PM2_NAME" 2>/dev/null || true
-PORT="$PORT" "$PM2_BIN" start server.js --name "$PM2_NAME"
+PORT="$PORT" "$PM2_BIN" start "$APP_ENTRY" --name "$PM2_NAME" --cwd "$DIR" --update-env
 "$PM2_BIN" save
 
 # ---- Optional: enable HTTPS via Nginx + Let's Encrypt (DNS-01) ----
@@ -3918,8 +3917,29 @@ update_app() {
   echo "[3/5] Installing dependencies..."
   "$NPM_BIN" install || { echo "ERROR: npm install failed."; return 1; }
 
-  echo "[4/5] Restarting PM2 process..."
-  "$PM2_BIN" restart "$APP_NAME" || { echo "ERROR: pm2 restart failed."; return 1; }
+  echo "[4/5] Restarting PM2 process (refresh script path)..."
+
+  APP_ENTRY=""
+  if [[ -f "$DIR/server.js" ]]; then
+    APP_ENTRY="$DIR/server.js"
+  elif [[ -f "$DIR/src/server.js" ]]; then
+    APP_ENTRY="$DIR/src/server.js"
+  elif [[ -f "$DIR/package.json" ]]; then
+    APP_ENTRY="$(node -e "const p=require('$DIR/package.json');process.stdout.write(p.main||'')" 2>/dev/null || true)"
+    [[ -n "$APP_ENTRY" ]] && APP_ENTRY="$DIR/$APP_ENTRY"
+  fi
+
+  if [[ -z "$APP_ENTRY" || ! -f "$APP_ENTRY" ]]; then
+    echo "ERROR: Could not detect app entrypoint after update."
+    return 1
+  fi
+
+  "$PM2_BIN" delete "$APP_NAME" >/dev/null 2>&1 || true
+  "$PM2_BIN" start "$APP_ENTRY" --name "$APP_NAME" --cwd "$DIR" --update-env || {
+    echo "ERROR: pm2 start failed."
+    return 1
+  }
+  "$PM2_BIN" save >/dev/null 2>&1 || true
 
   echo "[5/5] Done."
   echo "Update completed successfully."
