@@ -383,8 +383,15 @@ EOF
   sudo mv "$tmp" /root/.secrets/cloudflare.ini
   sudo chmod 600 /root/.secrets/cloudflare.ini
 
-  # idempotent-ish: if cert exists, skip issuance
-  if [[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" && -f "/etc/letsencrypt/live/${domain}/privkey.pem" ]]; then
+  # If cert exists but renewal config uses "manual", migrate by forcing a Cloudflare re-issue.
+  local renew_conf="/etc/letsencrypt/renewal/${domain}.conf"
+  local need_migrate=0
+  if [[ -f "$renew_conf" ]] && grep -qE '^[[:space:]]*authenticator[[:space:]]*=[[:space:]]*manual[[:space:]]*$' "$renew_conf"; then
+    need_migrate=1
+    warn "Existing renewal config for ${domain} uses manual authenticator; migrating to Cloudflare DNS plugin..."
+  fi
+
+  if [[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" && -f "/etc/letsencrypt/live/${domain}/privkey.pem" && "$need_migrate" -eq 0 ]]; then
     ok "Existing certificate found for ${domain} (skipping issuance)."
     return 0
   fi
@@ -394,8 +401,10 @@ EOF
     --dns-cloudflare \
     --dns-cloudflare-credentials /root/.secrets/cloudflare.ini \
     -d "$domain" \
+    --cert-name "$domain" \
     --agree-tos -m "$email" \
-    --non-interactive
+    --non-interactive \
+    --force-renewal
 
   [[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" && -f "/etc/letsencrypt/live/${domain}/privkey.pem" ]] \
     || die "Certificate issuance failed (Cloudflare). Expected cert files not found for: ${domain}"
@@ -509,20 +518,27 @@ reload_nginx_safe() {
 }
 
 ensure_certbot_renewal() {
-  # Certbot on Ubuntu typically uses systemd timer.
-  if systemctl list-unit-files 2>/dev/null | grep -q '^certbot\.timer'; then
-    if ! systemctl is-enabled certbot.timer >/dev/null 2>&1; then
-      sudo systemctl enable certbot.timer >/dev/null 2>&1 || true
-    fi
-    sudo systemctl start certbot.timer >/dev/null 2>&1 || true
+  # Certbot can be installed via apt (certbot.timer) or snap (snap.certbot.renew.timer).
+  local timer=""
+  if systemctl list-unit-files 2>/dev/null | grep -qE '^[[:space:]]*certbot\.timer[[:space:]]'; then
+    timer="certbot.timer"
+  elif systemctl list-unit-files 2>/dev/null | grep -qE '^[[:space:]]*snap\.certbot\.renew\.timer[[:space:]]'; then
+    timer="snap.certbot.renew.timer"
+  fi
 
-    if systemctl is-active certbot.timer >/dev/null 2>&1; then
-      ok "certbot.timer: active"
+  if [[ -n "$timer" ]]; then
+    if ! systemctl is-enabled "$timer" >/dev/null 2>&1; then
+      sudo systemctl enable "$timer" >/dev/null 2>&1 || true
+    fi
+    sudo systemctl start "$timer" >/dev/null 2>&1 || true
+
+    if systemctl is-active "$timer" >/dev/null 2>&1; then
+      ok "${timer}: active"
     else
-      warn "certbot.timer is not active. You may need to enable/start it manually."
+      warn "${timer} is not active. You may need to enable/start it manually."
     fi
   else
-    warn "certbot.timer not found (this system may schedule renew differently)."
+    warn "No certbot systemd timer found (certbot.timer or snap.certbot.renew.timer)."
   fi
 
   sudo certbot renew --dry-run || warn "certbot renew --dry-run failed (check certbot logs)."
