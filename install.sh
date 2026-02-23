@@ -288,38 +288,14 @@ apt_update_if_needed
 apt_install_if_missing ca-certificates update-ca-certificates
 apt_install_if_missing curl curl
 
-# ---- Installer metadata (dynamic) ----
-REPO_OWNER="power0matin"
-REPO_NAME="node-socketio-chatroom"
-REPO_BRANCH="main"
-RAW_BASE="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}"
+# Refresh installer metadata now that curl is available
+INSTALLER_VERSION="$(fetch_installer_version || echo "unknown")"
+INSTALLER_BUILD_DATE="$(fetch_installer_build_date || date -u +%Y-%m-%d)"
 
-INSTALLER_VERSION_FALLBACK="unknown"
-INSTALLER_BUILD_DATE_FALLBACK="$(date -u +%F)"
-
-resolve_installer_meta() {
-  # Version from repo package.json
-  local v=""
-  v="$(
-    curl -fsSL --max-time 6 "${RAW_BASE}/package.json" 2>/dev/null \
-      | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
-      | head -n1 || true
-  )"
-  INSTALLER_VERSION="${v:-$INSTALLER_VERSION_FALLBACK}"
-
-  # Build date from latest commit on branch (GitHub API)
-  local d=""
-  d="$(
-    curl -fsSL --max-time 6 \
-      -H "Accept: application/vnd.github+json" \
-      -H "User-Agent: ${REPO_NAME}-installer" \
-      "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/${REPO_BRANCH}" 2>/dev/null \
-      | sed -n 's/.*"date":[[:space:]]*"\([^"]*\)".*/\1/p' \
-      | head -n1 \
-      | cut -dT -f1 || true
-  )"
-  INSTALLER_BUILD_DATE="${d:-$INSTALLER_BUILD_DATE_FALLBACK}"
-}
+echo "${C_BOLD}========================================${C_RESET}"
+echo "${C_BOLD}  node-socketio-chatroom Installer${C_RESET} ${C_DIM}v${INSTALLER_VERSION} (${INSTALLER_BUILD_DATE})${C_RESET}"
+echo "${C_BOLD}========================================${C_RESET}"
+echo ""
 
 check_internet
 echo ""
