@@ -658,7 +658,7 @@ CF_ZONE_NAME=""
 
 if [[ "$ENABLE_HTTPS" -eq 1 ]]; then
   while true; do
-    read -r -p "DOMAIN_FQDN (e.g. nitrochat.hypersentry.shop): " DOMAIN_FQDN
+    read -r -p "DOMAIN_FQDN (e.g. subdomain.example.com): " DOMAIN_FQDN
     DOMAIN_FQDN="${DOMAIN_FQDN,,}"
     if validate_fqdn "$DOMAIN_FQDN"; then
       break
