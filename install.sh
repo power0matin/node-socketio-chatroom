@@ -1,22 +1,165 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# node-socketio-chatroom - Interactive Installer (Hardened, feature-preserving)
+# node-socketio-chatroom - Interactive Installer (Hardened + Enhanced Preflight)
 # App: node-socketio-chatroom
 # Folder: ~/chat-node-socketio-chatroom
 
 cleanup() { true; }
 trap cleanup EXIT
 
+# ---- Installer metadata ----
+INSTALLER_VERSION="1.1.4"
+INSTALLER_BUILD_DATE="2026-02-22"
+
 DIR_DEFAULT="$HOME/chat-node-socketio-chatroom"
 APP_NAME_DEFAULT="node-socketio-chatroom"
 
-echo "========================================"
-echo "    node-socketio-chatroom Installer"
-echo "========================================"
+need_apt_update=0
+
+have_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+# ---- pretty logging (auto-disable colors if not a TTY) ----
+if [[ -t 1 ]]; then
+  C_RESET=$'\033[0m'
+  C_DIM=$'\033[2m'
+  C_BOLD=$'\033[1m'
+  C_RED=$'\033[31m'
+  C_GREEN=$'\033[32m'
+  C_YELLOW=$'\033[33m'
+  C_BLUE=$'\033[34m'
+else
+  C_RESET="" C_DIM="" C_BOLD="" C_RED="" C_GREEN="" C_YELLOW="" C_BLUE=""
+fi
+
+log()   { echo "${C_BLUE}[INFO]${C_RESET} $*"; }
+ok()    { echo "${C_GREEN}[OK]${C_RESET}   $*"; }
+warn()  { echo "${C_YELLOW}[WARN]${C_RESET} $*"; }
+die()   { echo "${C_RED}[ERR]${C_RESET}  $*" >&2; exit 1; }
+
+# ---- OS / system info ----
+os_pretty() {
+  if [[ -r /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    echo "${PRETTY_NAME:-Linux}"
+  else
+    echo "Linux"
+  fi
+}
+
+get_ip() {
+  curl -fsS --max-time 3 https://api.ipify.org 2>/dev/null \
+    || curl -fsS --max-time 3 https://ifconfig.co 2>/dev/null \
+    || echo "UNKNOWN"
+}
+
+show_versions_if_present() {
+  if have_cmd node; then ok "node: $(node -v 2>/dev/null || echo '?')"; else warn "node: not installed"; fi
+  if have_cmd npm;  then ok "npm:  $(npm -v 2>/dev/null || echo '?')";  else warn "npm:  not installed"; fi
+  if have_cmd pm2;  then ok "pm2:  $(pm2 -v 2>/dev/null || echo '?')";  else warn "pm2:  not installed"; fi
+  if have_cmd git;  then ok "git:  $(git --version 2>/dev/null | awk '{print $3}' || echo '?')"; else warn "git:  not installed"; fi
+  if have_cmd curl; then ok "curl: $(curl --version 2>/dev/null | head -n1 | awk '{print $2}' || echo '?')"; else warn "curl: not installed"; fi
+}
+
+# ---- preflight checks ----
+require_sudo() {
+  if [[ "${EUID:-0}" -eq 0 ]]; then
+    ok "Running as root"
+    return 0
+  fi
+
+  if ! have_cmd sudo; then
+    die "sudo is required (not found). Run as root or install sudo."
+  fi
+
+  if sudo -n true 2>/dev/null; then
+    ok "sudo: available (non-interactive)"
+  else
+    log "sudo: needs password (you may be prompted)"
+    sudo true || die "sudo authentication failed"
+  fi
+}
+
+check_internet() {
+  if ! have_cmd curl; then
+    warn "curl not found yet (will be installed later). Skipping connectivity test."
+    return 0
+  fi
+  curl -fsS --max-time 5 "https://raw.githubusercontent.com/github/gitignore/main/Node.gitignore" >/dev/null 2>&1 \
+    && ok "Internet: reachable (raw.githubusercontent.com)" \
+    || warn "Internet: could not reach raw.githubusercontent.com (install may fail)"
+}
+
+port_in_use() {
+  local p="$1"
+
+  if have_cmd ss; then
+    ss -lptn "( sport = :$p )" 2>/dev/null | grep -q ":$p" && return 0 || return 1
+  fi
+
+  if have_cmd lsof; then
+    lsof -iTCP:"$p" -sTCP:LISTEN -n -P >/dev/null 2>&1 && return 0 || return 1
+  fi
+
+  if have_cmd netstat; then
+    netstat -lntp 2>/dev/null | grep -q ":$p " && return 0 || return 1
+  fi
+
+  return 1
+}
+
+# ---- apt helpers (safe) ----
+apt_update_if_needed() {
+  if [[ "$need_apt_update" -eq 1 ]]; then
+    sudo apt-get update -y
+    need_apt_update=0
+  fi
+}
+
+apt_install_if_missing() {
+  local pkg="$1"
+  local cmd="${2:-$1}"
+  if ! have_cmd "$cmd"; then
+    need_apt_update=1
+    apt_update_if_needed
+    sudo apt-get install -y "$pkg"
+    ok "Installed: $pkg"
+  else
+    ok "Present: $cmd"
+  fi
+}
+
+echo "${C_BOLD}========================================${C_RESET}"
+echo "${C_BOLD}  node-socketio-chatroom Installer${C_RESET} ${C_DIM}v${INSTALLER_VERSION} (${INSTALLER_BUILD_DATE})${C_RESET}"
+echo "${C_BOLD}========================================${C_RESET}"
 echo ""
+
+log "System:  $(os_pretty) | kernel: $(uname -r) | arch: $(uname -m)"
+PUBLIC_IP="$(get_ip)"
+log "Host:    $(hostname 2>/dev/null || echo '?') | user: $(id -un 2>/dev/null || echo '?') | ip: ${PUBLIC_IP}"
+echo ""
+
+log "Tooling versions (if present):"
+show_versions_if_present
+echo ""
+
+require_sudo
+
+# حداقل پیش‌نیازها برای تست اینترنت
+need_apt_update=1
+apt_update_if_needed
+apt_install_if_missing ca-certificates update-ca-certificates
+apt_install_if_missing curl curl
+
+check_internet
+echo ""
+
 echo "Please configure your chat server:"
 echo ""
+
+read -r -p "Install directory [default: ${DIR_DEFAULT}]: " INPUT_DIR
+DIR="${INPUT_DIR:-$DIR_DEFAULT}"
 
 read -r -p "Chat Room Name [default: ${APP_NAME_DEFAULT}]: " INPUT_APP_NAME
 APP_NAME_VAL="${INPUT_APP_NAME:-$APP_NAME_DEFAULT}"
@@ -61,7 +204,13 @@ read -r -p "Port [default: 3000]: " INPUT_PORT
 PORT="${INPUT_PORT:-3000}"
 
 # Validations
-[[ "$PORT" =~ ^[0-9]{1,5}$ ]] && (( PORT >= 1 && PORT <= 65535 )) || { echo "Invalid port"; exit 1; }
+[[ "$PORT" =~ ^[0-9]{1,5}$ ]] && (( PORT >= 1 && PORT <= 65535 )) || { die "Invalid port"; }
+
+if port_in_use "$PORT"; then
+  die "Port $PORT is already in use. Choose another port or stop the conflicting service."
+else
+  ok "Port $PORT is free"
+fi
 
 echo ""
 echo "Allowed Origins for CORS (comma-separated)."
@@ -100,10 +249,15 @@ esac
 echo ""
 
 
-echo "[2/6] Installing Node.js & PM2..."
+echo "[2/6] Checking system deps..."
+
+apt_install_if_missing git git
+apt_install_if_missing rsync rsync
+
+echo "[3/6] Installing Node.js & PM2..."
 
 # نصب Node.js (NodeSource)
-if ! command -v node >/dev/null 2>&1; then
+if ! have_cmd node; then
   curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
   sudo apt-get install -y nodejs
 fi
@@ -119,8 +273,10 @@ fi
 
 # اگر هنوز npm نبود، نصب npm و دوباره تلاش
 if [[ -z "$NPM_BIN" ]]; then
-  sudo apt-get update -y
+  need_apt_update=1
+  apt_update_if_needed
   sudo apt-get install -y npm
+
   for p in /usr/bin/npm /usr/local/bin/npm /bin/npm; do
     if [[ -x "$p" ]]; then NPM_BIN="$p"; break; fi
   done
@@ -131,22 +287,37 @@ fi
 
 # اگر هنوز هم نبود، fail
 if [[ -z "$NPM_BIN" ]]; then
-  echo "ERROR: npm not found (even after installing npm)."
-  echo "Try manually:"
-  echo "  sudo apt-get install -y nodejs npm"
-  exit 1
+  die "npm not found (even after installing npm). Try: sudo apt-get install -y nodejs npm"
 fi
 
-# pm2 را بدون وابستگی به PATH محدود sudo نصب کن
-sudo "$NPM_BIN" install -g pm2
+# Install pm2 only if missing
+if ! have_cmd pm2; then
+  sudo "$NPM_BIN" install -g pm2
+fi
 
-# چک سریع
+PM2_BIN=""
+for p in /usr/bin/pm2 /usr/local/bin/pm2 /bin/pm2; do
+  if [[ -x "$p" ]]; then PM2_BIN="$p"; break; fi
+done
+if [[ -z "$PM2_BIN" ]]; then
+  PM2_BIN="$(command -v pm2 2>/dev/null || true)"
+fi
+if [[ -z "$PM2_BIN" ]]; then
+  die "pm2 not found after installation. Try: sudo npm install -g pm2"
+fi
+
 node -v
 "$NPM_BIN" -v
-pm2 -v
+"$PM2_BIN" -v
 
-echo "[3/6] Creating project files in $DIR_DEFAULT..."
-DIR="$DIR_DEFAULT"
+echo "[4/6] Creating project files in $DIR..."
+
+mkdir -p "$DIR"
+if [[ -n "$(ls -A "$DIR" 2>/dev/null || true)" ]]; then
+  warn "Install directory is not empty: $DIR"
+  warn "Existing files may be overwritten."
+fi
+
 mkdir -p "$DIR/public" "$DIR/data" "$DIR/public/uploads"
 chmod 700 "$DIR/data" "$DIR/public/uploads"
 cd "$DIR"
@@ -154,7 +325,7 @@ cd "$DIR"
 cat > package.json << 'EOF'
 {
   "name": "node-socketio-chatroom",
-  "version": "1.0.11",
+  "version": "1.1.5",
   "main": "server.js",
   "scripts": { "start": "node server.js" },
   "dependencies": {
@@ -384,7 +555,11 @@ function loadAndSecureConfig(force = false) {
 
 loadAndSecureConfig(true);
 
-const PORT = Number(process.env.PORT || appConfig.port || 3000);
+const PORT = (() => {
+  const raw = (process.env.PORT ?? appConfig.port ?? 3000);
+  const p = parseInt(String(raw), 10);
+  return Number.isFinite(p) && p >= 1 && p <= 65535 ? p : 3000;
+})();
 
 // -------------------- Socket.io --------------------
 const corsOption = (() => {
@@ -2737,14 +2912,29 @@ EOF
 # in place of __PASTE_YOUR_EXISTING_INDEX_HTML_HERE__ (exactly as you have it).
 # (I didn't alter UI to avoid breaking anything.)
 echo "[4/6] Applying configuration..."
-# Replace placeholders if they exist in your index.html
-sed -i "s|__APP_NAME_PLACEHOLDER__|$APP_NAME_VAL|g" public/index.html || true
-sed -i "s|__COLOR_DEFAULT__|$C_DEF|g" public/index.html || true
-sed -i "s|__COLOR_DARK__|$C_DARK|g" public/index.html || true
-sed -i "s|__COLOR_LIGHT__|$C_LIGHT|g" public/index.html || true
+sed_escape() {
+  # escape: \  &  |
+  printf '%s' "$1" | sed -e 's/[\/&|\\]/\\&/g'
+}
+APP_NAME_ESC="$(sed_escape "$APP_NAME_VAL")"
+C_DEF_ESC="$(sed_escape "$C_DEF")"
+C_DARK_ESC="$(sed_escape "$C_DARK")"
+C_LIGHT_ESC="$(sed_escape "$C_LIGHT")"
 
-echo "[5/6] Installing project dependencies..."
-"$NPM_BIN" install
+sed -i "s|__APP_NAME_PLACEHOLDER__|$APP_NAME_ESC|g" public/index.html || true
+sed -i "s|__COLOR_DEFAULT__|$C_DEF_ESC|g" public/index.html || true
+sed -i "s|__COLOR_DARK__|$C_DARK_ESC|g" public/index.html || true
+sed -i "s|__COLOR_LIGHT__|$C_LIGHT_ESC|g" public/index.html || true
+echo "[5/6] Installing project dependencies (optimized)..."
+# speed: disable audit/fund during install
+"$NPM_BIN" config set fund false >/dev/null 2>&1 || true
+"$NPM_BIN" config set audit false >/dev/null 2>&1 || true
+
+if [[ -f package-lock.json ]]; then
+  "$NPM_BIN" ci --omit=dev
+else
+  "$NPM_BIN" install --omit=dev
+fi
 
 # --- After npm install: create config with adminPassHash (no plaintext) ---
 ADMIN_PASS_HASH="$(
@@ -2774,28 +2964,54 @@ if [[ -z "${DATA_ENC_KEY}" || "${#DATA_ENC_KEY}" -lt 64 ]]; then
   exit 1
 fi
 
+json_escape() {
+  # Escape JSON string safely:
+  # - remove newlines
+  # - escape backslash and double-quote
+  printf '%s' "$1" | tr -d '\r\n' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
 cat > data/config.json <<EOF
 {
-  "adminUser": "$(echo "$ADMIN_USER" | sed 's/"/\\"/g')",
-  "adminPassHash": "$(echo "$ADMIN_PASS_HASH" | sed 's/"/\\"/g')",
+  "adminUser": "$(json_escape "$ADMIN_USER")",
+  "adminPassHash": "$(json_escape "$ADMIN_PASS_HASH")",
   "port": $PORT,
   "maxFileSizeMB": 50,
-  "appName": "$(echo "$APP_NAME_VAL" | sed 's/"/\\"/g')",
+  "appName": "$(json_escape "$APP_NAME_VAL")",
   "hideUserList": false,
-  "allowedOrigins": "$(echo "$ALLOWED_ORIGINS" | sed 's/"/\\"/g')",
+  "allowedOrigins": "$(json_escape "$ALLOWED_ORIGINS")",
   "protectUploads": true,
   "dataEncKey": "$DATA_ENC_KEY"
 }
 EOF
 chmod 600 data/config.json
 
+REQ_FILES=(
+  "$DIR/package.json"
+  "$DIR/server.js"
+  "$DIR/public/index.html"
+  "$DIR/data/config.json"
+)
+
+missing=0
+for f in "${REQ_FILES[@]}"; do
+  if [[ ! -f "$f" ]]; then
+    warn "Missing required file: $f"
+    missing=1
+  fi
+done
+
+if (( missing == 1 )); then
+  die "Install incomplete: required runtime files are missing."
+fi
+
 # Do NOT keep plaintext password around longer than needed
 unset ADMIN_PASS
 echo "[6/6] Starting server with PM2..."
 PM2_NAME="${APP_NAME_VAL}"
-pm2 delete "$PM2_NAME" 2>/dev/null || true
-PORT="$PORT" pm2 start server.js --name "$PM2_NAME"
-pm2 save
+"$PM2_BIN" delete "$PM2_NAME" 2>/dev/null || true
+PORT="$PORT" "$PM2_BIN" start server.js --name "$PM2_NAME"
+"$PM2_BIN" save
 
 echo "Creating management tool..."
 
@@ -2807,6 +3023,18 @@ APP_NAME="__PM2_NAME__"
 DIR="__DIR__"
 CONFIG_FILE="$DIR/data/config.json"
 INDEX_FILE="$DIR/public/index.html"
+
+PM2_BIN=""
+for p in /usr/bin/pm2 /usr/local/bin/pm2 /bin/pm2; do
+  if [[ -x "$p" ]]; then PM2_BIN="$p"; break; fi
+done
+if [[ -z "$PM2_BIN" ]]; then
+  PM2_BIN="$(command -v pm2 2>/dev/null || true)"
+fi
+if [[ -z "$PM2_BIN" ]]; then
+  echo "ERROR: pm2 not found."
+  exit 1
+fi
 
 # Repo settings for update
 REPO_URL="https://github.com/power0matin/node-socketio-chatroom.git"
@@ -2900,7 +3128,6 @@ update_app() {
   echo "Preserve: data/ , public/uploads/ , config.json"
   echo "-----------------------------------"
 
-  require_cmd pm2 || return 1
   require_cmd node || return 1
 
   if [[ ! -d "$DIR" ]]; then
@@ -2951,7 +3178,7 @@ update_app() {
   "$NPM_BIN" install || { echo "ERROR: npm install failed."; return 1; }
 
   echo "[4/5] Restarting PM2 process..."
-  pm2 restart "$APP_NAME" || { echo "ERROR: pm2 restart failed."; return 1; }
+  "$PM2_BIN" restart "$APP_NAME" || { echo "ERROR: pm2 restart failed."; return 1; }
 
   echo "[5/5] Done."
   echo "Update completed successfully."
@@ -2974,10 +3201,10 @@ while true; do
   read -r -p "Select option: " opt
 
   case $opt in
-    1) pm2 status "$APP_NAME"; pause ;;
-    2) pm2 restart "$APP_NAME"; echo "Restarted."; pause ;;
-    3) pm2 stop "$APP_NAME"; echo "Stopped."; pause ;;
-    4) pm2 logs "$APP_NAME" --lines 50 ;;
+    1) "$PM2_BIN" status "$APP_NAME"; pause ;;
+    2) "$PM2_BIN" restart "$APP_NAME"; echo "Restarted."; pause ;;
+    3) "$PM2_BIN" stop "$APP_NAME"; echo "Stopped."; pause ;;
+    4) "$PM2_BIN" logs "$APP_NAME" --lines 50 ;;
     5)
       echo "--- Current Settings ---"
       cat "$CONFIG_FILE" || true
@@ -2993,18 +3220,18 @@ while true; do
         a)
           read -r -p "New Username: " NEW_USER
           node -e "const fs=require('fs');const p='$CONFIG_FILE';const d=JSON.parse(fs.readFileSync(p));d.adminUser=String(process.env.NEW_USER||'').trim();fs.writeFileSync(p, JSON.stringify(d,null,2));" NEW_USER="$NEW_USER"
-          pm2 restart "$APP_NAME"
+          "$PM2_BIN" restart "$APP_NAME"
           ;;
         b)
           read -r -p "New Password: " NEW_PASS
           node -e "const fs=require('fs');const bcrypt=require('bcryptjs');const p='$CONFIG_FILE';const d=JSON.parse(fs.readFileSync(p));d.adminPassHash=bcrypt.hashSync(String(process.env.NEW_PASS||''),12);delete d.adminPass;fs.writeFileSync(p, JSON.stringify(d,null,2));" NEW_PASS="$NEW_PASS"
-          pm2 restart "$APP_NAME"
+          "$PM2_BIN" restart "$APP_NAME"
           ;;
         c)
           read -r -p "New Max Size (MB): " NEW_SIZE
           if [[ "$NEW_SIZE" =~ ^[0-9]+$ ]]; then
             node -e "const fs=require('fs');const p='$CONFIG_FILE';const d=JSON.parse(fs.readFileSync(p));d.maxFileSizeMB=Number(process.env.NEW_SIZE);fs.writeFileSync(p, JSON.stringify(d,null,2));" NEW_SIZE="$NEW_SIZE"
-            pm2 restart "$APP_NAME"
+            "$PM2_BIN" restart "$APP_NAME"
           else
             echo "Invalid number."
           fi
@@ -3012,14 +3239,19 @@ while true; do
         d)
           read -r -p "New App Name: " NEW_APP_NAME
           node -e "const fs=require('fs');const p='$CONFIG_FILE';const d=JSON.parse(fs.readFileSync(p));d.appName=String(process.env.NEW_APP_NAME||'').trim();fs.writeFileSync(p, JSON.stringify(d,null,2));" NEW_APP_NAME="$NEW_APP_NAME"
-          sed -i "s|<title>.*</title>|<title>$NEW_APP_NAME</title>|g" "$INDEX_FILE" 2>/dev/null || true
-          sed -i "s|appName = ref('.*');|appName = ref('$NEW_APP_NAME');|g" "$INDEX_FILE" 2>/dev/null || true
-          pm2 restart "$APP_NAME"
+
+          # Escape for sed replacement
+          NEW_APP_ESC="$(printf '%s' "$NEW_APP_NAME" | tr -d '\r\n' | sed -e 's/[\/&|\\]/\\&/g')"
+
+          sed -i "s|<title>.*</title>|<title>$NEW_APP_ESC</title>|g" "$INDEX_FILE" 2>/dev/null || true
+          sed -i "s|appName = ref('.*');|appName = ref('$NEW_APP_ESC');|g" "$INDEX_FILE" 2>/dev/null || true
+
+          "$PM2_BIN" restart "$APP_NAME"
           ;;
         e)
           read -r -p "Allowed Origins (comma-separated or *): " NEW_ORIGINS
           node -e "const fs=require('fs');const p='$CONFIG_FILE';const d=JSON.parse(fs.readFileSync(p));d.allowedOrigins=String(process.env.NEW_ORIGINS||'*').trim();fs.writeFileSync(p, JSON.stringify(d,null,2));" NEW_ORIGINS="$NEW_ORIGINS"
-          pm2 restart "$APP_NAME"
+          "$PM2_BIN" restart "$APP_NAME"
           ;;
       esac
       pause
@@ -3031,7 +3263,7 @@ while true; do
     7)
       read -r -p "Are you sure you want to DELETE everything? (y/n): " confirm
       if [[ "$confirm" == "y" ]]; then
-        pm2 delete "$APP_NAME" || true
+        "$PM2_BIN" delete "$APP_NAME" || true
         rm -rf "$DIR"
         sudo rm -f /usr/local/bin/node-socketio-chatroom
         echo "Uninstalled successfully."
@@ -3044,9 +3276,11 @@ while true; do
 done
 EOF_MENU
 
-# Fill placeholders safely (فایل درست همونیه که ساختی)
-sed -i "s|__DIR__|$DIR|g" /tmp/node-socketio-chatroom-menu.sh
-sed -i "s|__PM2_NAME__|$PM2_NAME|g" /tmp/node-socketio-chatroom-menu.sh
+DIR_ESC="$(sed_escape "$DIR")"
+PM2_NAME_ESC="$(sed_escape "$PM2_NAME")"
+
+sed -i "s|__DIR__|$DIR_ESC|g" /tmp/node-socketio-chatroom-menu.sh
+sed -i "s|__PM2_NAME__|$PM2_NAME_ESC|g" /tmp/node-socketio-chatroom-menu.sh
 
 sudo mv /tmp/node-socketio-chatroom-menu.sh /usr/local/bin/node-socketio-chatroom
 sudo chmod +x /usr/local/bin/node-socketio-chatroom

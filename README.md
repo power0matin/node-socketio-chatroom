@@ -39,6 +39,8 @@ A production-ready, real-time chatroom built with **Node.js + Express + Socket.I
 - **Reply to message** UX (swipe / context menu)
 - **Unread counters** for channels and private chats
 - **Notifications** (browser notifications + sound)
+- **Saved Messages** per-user private room (`__saved__<username>`)
+- **Channel access modes**: `restricted` (admin grants access) vs `open` (all users)
 
 ### 🛡️ Roles & Moderation
 
@@ -53,6 +55,7 @@ A production-ready, real-time chatroom built with **Node.js + Express + Socket.I
   - **IP rate limiting**
   - **Authenticated uploads via token** (prevents anonymous disk abuse)
   - Optional **download protection via token query** (`protectUploads`)
+  - When `protectUploads: true`, downloads require a valid token via `?t=...` or `X-Upload-Token`
   - **MIME + extension allowlists**
   - **Max upload size** configurable
 
@@ -60,10 +63,13 @@ A production-ready, real-time chatroom built with **Node.js + Express + Socket.I
 
 Stored under `data/`:
 
-- users (hashed passwords, roles, ban state)
-- messages (per channel)
-- channels list
-- runtime config
+- `config.json` (runtime config)
+- `users.json` (hashed passwords, roles, ban state)
+- `channels.json` (public channels)
+- `messages.json` (message history for public channels, DMs, and Saved Messages)
+- `conversations.json` (conversation registry: public + dm + saved)
+- `memberships.json` (access control map; used when `accessMode: restricted`)
+- `attachments.json` (reserved metadata; optional)
 
 Includes **atomic JSON writes** to reduce corruption risk.
 
@@ -108,12 +114,15 @@ Example:
 ├─ package.json
 ├─ public/
 │  ├─ index.html
-│  └─ uploads/               # uploaded files (restricted permissions)
+│  └─ uploads/                 # uploaded files (restricted permissions)
 └─ data/
-   ├─ config.json            # runtime configuration (hashed admin password)
-   ├─ users.json             # users + roles + ban state (hashed user passwords)
-   ├─ messages.json          # per-channel message history
-   └─ channels.json          # channels list
+   ├─ config.json              # runtime configuration (hashed admin password)
+   ├─ users.json               # users + roles + ban state (hashed user passwords)
+   ├─ channels.json            # channels list
+   ├─ messages.json            # channel histories (public + dm + saved)
+   ├─ conversations.json       # conversation registry (public + dm + saved)
+   ├─ memberships.json         # per-channel access control (restricted/open mode)
+   └─ attachments.json         # (reserved) metadata storage
 ```
 
 ## 🚀 Quick Start (Local)
@@ -137,7 +146,7 @@ Open:
 
 - [http://localhost:3000](http://localhost:3000)
 
-> Local run uses `data/config.json` if present. If it does not exist yet, the server will create it using defaults.
+> Note: If `dataEncKey` is set in `data/config.json`, JSON persistence files may be stored encrypted (AES-256-GCM wrapper).
 
 ## 🧰 Production Install (Ubuntu/Debian)
 
@@ -151,12 +160,12 @@ It will:
 - start the server via PM2
 - install a management CLI command: `node-socketio-chatroom`
 
-✅ **Client is already modularized**:
+✅ **Client is single-file (installer-generated):**
 
-- UI: `public/index.html`
-- Client JS: `public/assets/app.js`
-- Styles: `public/assets/app.css`
-- Theme vars: `public/assets/theme.css`
+- UI + Client JS + Styles are embedded into: `public/index.html` (CDN-based)
+- Theme vars are injected by installer placeholders:
+  - `__APP_NAME_PLACEHOLDER__`
+  - `__COLOR_DEFAULT__`, `__COLOR_DARK__`, `__COLOR_LIGHT__`
 
 ### Requirements
 
@@ -167,14 +176,7 @@ It will:
 ### Install (Recommended)
 
 ```bash
-sudo apt-get update -y
-sudo apt-get install -y git curl ca-certificates
-
-git clone https://github.com/power0matin/node-socketio-chatroom.git
-cd node-socketio-chatroom
-
-chmod +x install.sh
-./install.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/power0matin/node-socketio-chatroom/main/install.sh)
 ```
 
 At the end, you will get:
@@ -192,9 +194,9 @@ node server.js
 
 ### Notes
 
-- `public/index.html` loads the client from `/assets/app.js`. Do **not** paste Vue/socket code inside `index.html` anymore.
-- If you use a reverse proxy (Nginx), set `allowedOrigins` to your domain (recommended).
-- If you change settings using the CLI, it restarts the PM2 process automatically.
+- The installer writes a complete `public/index.html` (Vue 3 + Tailwind + FontAwesome via CDN).
+- If you use a reverse proxy (Nginx), set `allowedOrigins` to your domain (recommended) and restart.
+- The CLI updates `data/config.json` and restarts the PM2 process automatically.
 
 ## 🧑‍💻 Management CLI
 
@@ -224,16 +226,19 @@ data/config.json
 
 ### Supported options
 
-| Key              | Type                | Description                                                                 |
-| ---------------- | ------------------- | --------------------------------------------------------------------------- |
-| `adminUser`      | string              | Admin username                                                              |
-| `adminPassHash`  | string              | Admin bcrypt password hash                                                  |
-| `port`           | number              | Server port                                                                 |
-| `maxFileSizeMB`  | number              | Upload limit                                                                |
-| `appName`        | string              | UI title                                                                    |
-| `hideUserList`   | boolean             | Hide online users list from normal users                                    |
-| `allowedOrigins` | `*` or string/array | Socket.IO CORS allowlist (`*` or comma-separated origins / array in config) |
-| `protectUploads` | boolean             | If `true`, downloads require a valid token (`?t=...` or `X-Upload-Token`)   |
+| Key                          | Type                   | Description                                                             |
+| ---------------------------- | ---------------------- | ----------------------------------------------------------------------- |
+| `adminUser`                  | string                 | Admin username                                                          |
+| `adminPassHash`              | string                 | Admin bcrypt hash                                                       |
+| `port`                       | number                 | Server port                                                             |
+| `maxFileSizeMB`              | number                 | Upload limit                                                            |
+| `appName`                    | string                 | UI title                                                                |
+| `hideUserList`               | boolean                | Hide online users list from normal users                                |
+| `allowedOrigins`             | `*` or string/array    | Socket.IO CORS allowlist (`*` or comma-separated / array)               |
+| `protectUploads`             | boolean                | If `true`, downloads require token (`?t=...` or `X-Upload-Token`)       |
+| `dataEncKey`                 | string (hex, 64 chars) | AES-256-GCM key for encrypting JSON at rest (optional but recommended)  |
+| `accessMode`                 | `restricted` \| `open` | Channel policy: restricted needs membership; open allows all            |
+| `defaultChannelsForNewUsers` | array of strings       | Auto-grant membership to new users (only meaningful in restricted mode) |
 
 > Tip: Prefer using the built-in CLI to edit config safely instead of manual JSON edits.
 
