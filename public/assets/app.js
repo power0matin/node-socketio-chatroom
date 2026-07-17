@@ -180,8 +180,12 @@
             return;
           }
 
-          // default: go bottom
-          c.scrollTop = c.scrollHeight;
+          // only auto-scroll if user is already near bottom
+          const isNearBottom =
+            c.scrollTop + c.clientHeight >= c.scrollHeight - 150;
+          if (isNearBottom) {
+            c.scrollTop = c.scrollHeight;
+          }
         });
       };
 
@@ -446,19 +450,38 @@
           mediaRecorder.onstop = () => {
             try {
               const audioBlob = new Blob(audioChunks, { type: "audio/webm" });
-              const reader = new FileReader();
-              reader.readAsDataURL(audioBlob);
-              reader.onloadend = () => {
-                socket.emit("send_message", {
-                  text: "",
-                  type: "audio",
-                  content: reader.result,
-                  channel: currentChannel.value,
-                  conversationId: currentChannel.value,
-                  replyTo: replyingTo.value,
-                });
-                replyingTo.value = null;
+              // Upload via /upload endpoint instead of sending data URL
+              const formData = new FormData();
+              formData.append("file", audioBlob, "recording.webm");
+
+              const xhr = new XMLHttpRequest();
+              xhr.open("POST", "/upload", true);
+              if (uploadToken.value)
+                xhr.setRequestHeader("X-Upload-Token", uploadToken.value);
+
+              xhr.onload = () => {
+                try {
+                  if (xhr.status === 200) {
+                    const res = JSON.parse(xhr.responseText);
+                    const securedUrl = uploadToken.value
+                      ? res.url + "?t=" + encodeURIComponent(uploadToken.value)
+                      : res.url;
+                    socket.emit("send_message", {
+                      text: "",
+                      type: "audio",
+                      content: securedUrl,
+                      channel: currentChannel.value,
+                      conversationId: currentChannel.value,
+                      replyTo: replyingTo.value,
+                    });
+                    replyingTo.value = null;
+                  }
+                } catch (e) {
+                  console.error(e);
+                }
               };
+              xhr.onerror = () => console.error("Audio upload failed");
+              xhr.send(formData);
             } catch (e) {
               console.error(e);
             }
@@ -611,10 +634,31 @@
       // ---- socket events ----
       socket.on("connect", () => {
         isConnected.value = true;
+        // Auto-rejoin current channel after reconnect
+        if (isLoggedIn.value && currentChannel.value) {
+          if (isSavedView.value) {
+            socket.emit("join_saved");
+          } else if (isPrivateChat.value) {
+            const dmTarget = String(currentChannel.value)
+              .split("_pv_")
+              .find((u) => u !== user.value.username);
+            if (dmTarget) socket.emit("join_private", dmTarget);
+          } else {
+            socket.emit("join_channel", currentChannel.value);
+          }
+        }
       });
 
       socket.on("disconnect", () => {
         isConnected.value = false;
+      });
+
+      socket.on("connect_error", (err) => {
+        console.error("Socket connection error:", err.message);
+        if (!isLoggedIn.value) {
+          error.value = "خطا در اتصال به سرور. لطفا دوباره تلاش کنید.";
+          isAuthBusy.value = false;
+        }
       });
 
       socket.on("login_success", (data) => {
@@ -834,9 +878,11 @@
           }
         } catch {}
 
-        // scroll listener for showScrollDown
-        const c = document.getElementById("messages-container");
-        if (c) {
+        // scroll listener for showScrollDown (watch for dynamic DOM)
+        const attachScrollListener = () => {
+          const c = document.getElementById("messages-container");
+          if (!c || c._scrollListenerAttached) return;
+          c._scrollListenerAttached = true;
           c.addEventListener(
             "scroll",
             () => {
@@ -846,7 +892,11 @@
             },
             { passive: true },
           );
-        }
+        };
+        attachScrollListener();
+        // Re-attach when DOM changes (channel switch)
+        const observer = new MutationObserver(attachScrollListener);
+        observer.observe(document.body, { childList: true, subtree: true });
       });
 
       // ---- expose to template ----

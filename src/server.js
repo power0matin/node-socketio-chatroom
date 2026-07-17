@@ -18,7 +18,30 @@ const server = http.createServer(app);
 // -------------------- Security headers --------------------
 app.use(
   helmet({
-    contentSecurityPolicy: false,
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: [
+          "'self'",
+          "'unsafe-inline'",
+          "https://cdn.tailwindcss.com",
+          "https://unpkg.com",
+          "https://cdnjs.cloudflare.com",
+        ],
+        styleSrc: [
+          "'self'",
+          "'unsafe-inline'",
+          "https://fonts.googleapis.com",
+          "https://cdnjs.cloudflare.com",
+        ],
+        fontSrc: ["'self'", "https://fonts.gstatic.com"],
+        imgSrc: ["'self'", "data:", "blob:"],
+        mediaSrc: ["'self'", "data:", "blob:"],
+        connectSrc: ["'self'", "ws:", "wss:"],
+        frameSrc: ["'none'"],
+        objectSrc: ["'none'"],
+      },
+    },
     crossOriginEmbedderPolicy: false,
     crossOriginOpenerPolicy: false,
   }),
@@ -152,12 +175,14 @@ let appConfig = {
   maxFileSizeMB: 50,
   appName: "node-socketio-chatroom",
   hideUserList: false,
-  allowedOrigins: "*",
+  allowedOrigins: "http://localhost:3000",
   protectUploads: true,
   dataEncKey: "",
-  // ✅ NEW: channel access policy
   accessMode: "restricted", // 'restricted' | 'open'
-  defaultChannelsForNewUsers: [], // e.g. ['General'] if you want
+  defaultChannelsForNewUsers: ["General"],
+  maxChannelMessages: 100,
+  maxDmMessages: 500,
+  maxSavedMessages: 1000,
 };
 
 function normalizeOrigins(val) {
@@ -225,6 +250,18 @@ function loadAndSecureConfig(force = false) {
     }
     if (!Array.isArray(appConfig.defaultChannelsForNewUsers)) {
       appConfig.defaultChannelsForNewUsers = [];
+      saveNeeded = true;
+    }
+    if (typeof appConfig.maxChannelMessages !== "number" || appConfig.maxChannelMessages < 10) {
+      appConfig.maxChannelMessages = 100;
+      saveNeeded = true;
+    }
+    if (typeof appConfig.maxDmMessages !== "number" || appConfig.maxDmMessages < 10) {
+      appConfig.maxDmMessages = 500;
+      saveNeeded = true;
+    }
+    if (typeof appConfig.maxSavedMessages !== "number" || appConfig.maxSavedMessages < 10) {
+      appConfig.maxSavedMessages = 1000;
       saveNeeded = true;
     }
 
@@ -434,7 +471,15 @@ function listAccessibleChannels(username, role) {
   return channels.filter((ch) => isMember(ch, username));
 }
 
+let dataDirty = false;
+
+function markDirty() {
+  dataDirty = true;
+}
+
 function saveData() {
+  if (!dataDirty) return;
+  dataDirty = false;
   try {
     atomicWriteJsonSecure(USERS_FILE, persistentUsers, 0o600);
     atomicWriteJsonSecure(CHANNELS_FILE, channels, 0o600);
@@ -444,9 +489,10 @@ function saveData() {
     atomicWriteJsonSecure(ATTACHMENTS_FILE, attachments, 0o600);
   } catch (e) {
     console.error("Error saving data", e);
+    dataDirty = true;
   }
 }
-setInterval(saveData, 30_000).unref();
+setInterval(saveData, 10_000).unref();
 
 // migrate users plaintext -> hash (backward compat)
 (function migrateUsersIfNeeded() {
@@ -552,6 +598,14 @@ setInterval(() => {
   if (changed) rebuildUploadMiddleware();
 }, 5000).unref();
 
+// Also watch config file for changes (more efficient than polling)
+try {
+  fs.watch(CONFIG_FILE, { persistent: false }, () => {
+    const changed = loadAndSecureConfig(true);
+    if (changed) rebuildUploadMiddleware();
+  });
+} catch {}
+
 // Protect downloads if enabled
 app.use("/uploads", (req, res, next) => {
   if (!appConfig.protectUploads) return next();
@@ -563,9 +617,6 @@ app.use("/uploads", (req, res, next) => {
   next();
 });
 
-// ✅ Serve uploads
-app.use("/uploads", express.static(UPLOADS_DIR));
-
 // Serve uploads from the correct folder at project root
 app.use("/uploads", express.static(UPLOADS_DIR));
 
@@ -576,6 +627,11 @@ app.get("/", (_req, res) => {
 });
 
 app.post("/upload", uploadLimiter, (req, res) => {
+  // CSRF check: verify Origin or Referer header matches server origin
+  const origin = req.headers.origin || req.headers.referer || "";
+  if (origin && !origin.startsWith(req.protocol + "://" + req.get("host")))
+    return res.status(403).json({ error: "Forbidden: cross-origin upload." });
+
   const tok = String(req.headers["x-upload-token"] || "");
   const rec = uploadTokens.get(tok);
   if (!rec || rec.exp <= Date.now())
@@ -641,6 +697,7 @@ function getBannedUsers() {
 
 // -------------------- Login rate limit --------------------
 const loginAttempts = new Map();
+const ipLoginAttempts = new Map();
 
 function getSocketIp(socket) {
   const xf = socket.handshake.headers["x-forwarded-for"];
@@ -653,40 +710,53 @@ function loginKey(ip, username) {
 }
 
 function isLoginLimited(ip, username) {
-  const key = loginKey(ip, username);
-  const now = Date.now();
-  const rec = loginAttempts.get(key);
-
   const windowMs = 10 * 60 * 1000;
-  const max = 12;
+  const maxPerUser = 12;
+  const maxPerIp = 30;
 
-  if (!rec) return false;
+  // Per IP limit (brute-force across many usernames)
+  const ipRec = ipLoginAttempts.get(ip);
+  if (ipRec && Date.now() - ipRec.first <= windowMs && ipRec.count >= maxPerIp)
+    return true;
+  if (ipRec && Date.now() - ipRec.first > windowMs) ipLoginAttempts.delete(ip);
 
-  if (now - rec.first > windowMs) {
-    loginAttempts.delete(key);
-    return false;
-  }
+  // Per username+IP limit
+  const key = loginKey(ip, username);
+  const rec = loginAttempts.get(key);
+  if (rec && Date.now() - rec.first <= windowMs && rec.count >= maxPerUser)
+    return true;
+  if (rec && Date.now() - rec.first > windowMs) loginAttempts.delete(key);
 
-  return rec.count >= max;
+  return false;
 }
 
 function recordLoginFail(ip, username) {
-  const key = loginKey(ip, username);
   const now = Date.now();
-  const rec = loginAttempts.get(key);
 
-  if (!rec) {
-    loginAttempts.set(key, { count: 1, first: now, last: now });
-    return;
+  // Record per IP
+  const ipRec = ipLoginAttempts.get(ip);
+  if (!ipRec) {
+    ipLoginAttempts.set(ip, { count: 1, first: now });
+  } else {
+    ipRec.count += 1;
+    ipLoginAttempts.set(ip, ipRec);
   }
 
-  rec.count += 1;
-  rec.last = now;
-  loginAttempts.set(key, rec);
+  // Record per username+IP
+  const key = loginKey(ip, username);
+  const rec = loginAttempts.get(key);
+  if (!rec) {
+    loginAttempts.set(key, { count: 1, first: now, last: now });
+  } else {
+    rec.count += 1;
+    rec.last = now;
+    loginAttempts.set(key, rec);
+  }
 }
 
 function clearLoginFails(ip, username) {
   loginAttempts.delete(loginKey(ip, username));
+  ipLoginAttempts.delete(ip);
 }
 
 setInterval(() => {
@@ -694,6 +764,9 @@ setInterval(() => {
   const windowMs = 10 * 60 * 1000;
   for (const [k, v] of loginAttempts.entries()) {
     if (!v || now - v.first > windowMs) loginAttempts.delete(k);
+  }
+  for (const [k, v] of ipLoginAttempts.entries()) {
+    if (!v || now - v.first > windowMs) ipLoginAttempts.delete(k);
   }
 }, 60_000).unref();
 
@@ -857,6 +930,7 @@ io.on("connection", (socket) => {
 
     clearLoginFails(ip, u);
     persistentUsers[u].last_seen = Date.now();
+    markDirty();
 
     const role = persistentUsers[u].role || "user";
     users[socket.id] = { username: u, role };
@@ -955,7 +1029,7 @@ io.on("connection", (socket) => {
 
     if (messages[sid].length !== before) {
       io.to(sid).emit("message_deleted", { channel: sid, id });
-      saveData();
+      markDirty();
     }
   });
 
@@ -1018,7 +1092,8 @@ io.on("connection", (socket) => {
     };
 
     messages[sid].push(msg);
-    if (messages[sid].length > 1000) messages[sid].shift();
+    markDirty();
+    if (messages[sid].length > appConfig.maxSavedMessages) messages[sid].shift();
 
     // اگر الان داخل saved هست همزمان می‌بیند
     io.to(sid).emit("receive_message", msg);
@@ -1035,7 +1110,12 @@ io.on("connection", (socket) => {
     const clean = cleanChannelName(channelName);
     if (!clean) return;
 
+    // Reject reserved names that collide with DM or Saved Message IDs
+    if (clean.includes("_pv_") || clean.startsWith("__saved__"))
+      return socket.emit("error", "نام کانال رزرو شده است.");
+
     if (!channels.includes(clean)) channels.push(clean);
+    markDirty();
     ensurePublicConversation(clean, user.username);
 
     // creator gets access in restricted mode
@@ -1066,6 +1146,7 @@ io.on("connection", (socket) => {
     if (!clean || clean === "General") return;
 
     channels = channels.filter((c) => c !== clean);
+    markDirty();
 
     delete conversations[clean];
     delete memberships[clean];
@@ -1100,6 +1181,7 @@ io.on("connection", (socket) => {
       appConfig.accessMode = newSettings.accessMode;
     }
 
+    markDirty();
     atomicWriteJson(CONFIG_FILE, appConfig, 0o600);
 
     // refresh channels list for everyone
@@ -1142,6 +1224,7 @@ io.on("connection", (socket) => {
 
     if (okAllow) addMember(ch, t, "member");
     else removeMember(ch, t);
+    markDirty();
 
     saveData();
 
@@ -1187,11 +1270,13 @@ io.on("connection", (socket) => {
     if (!persistentUsers[t]) return;
 
     persistentUsers[t].isBanned = true;
+    markDirty();
 
     for (const key of Object.keys(messages)) {
       if (Array.isArray(messages[key]))
         messages[key] = messages[key].filter((m) => m.sender !== t);
     }
+    markDirty();
 
     saveData();
     io.emit("bulk_delete_user", t);
@@ -1216,6 +1301,7 @@ io.on("connection", (socket) => {
     const t = cleanUsername(targetUsername);
     if (persistentUsers[t]) {
       persistentUsers[t].isBanned = false;
+      markDirty();
       saveData();
       socket.emit("action_success", `کاربر ${t} آزاد شد.`);
       socket.emit("banned_list", getBannedUsers());
@@ -1236,6 +1322,7 @@ io.on("connection", (socket) => {
     const t = cleanUsername(targetUsername);
     if (persistentUsers[t] && ["user", "vip"].includes(role)) {
       persistentUsers[t].role = role;
+      markDirty();
       saveData();
 
       const targetSocketId = Object.keys(users).find(
@@ -1332,27 +1419,13 @@ io.on("connection", (socket) => {
       return false;
     }
 
-    function isSafeDataUrl(u, kind) {
-      if (!u || typeof u !== "string") return false;
-      // allow only audio recording data url (your recorder uses audio/webm)
-      if (kind === "audio") return u.startsWith("data:audio/");
-      // disallow data:image/video/file from users (you use uploads for those)
-      return false;
-    }
-
     if (type !== "text") {
       if (!content) return socket.emit("error", "محتوای پیام نامعتبر است.");
-      const ok = isSafeUploadsUrl(content) || isSafeDataUrl(content, type);
+      const ok = isSafeUploadsUrl(content);
 
       if (!ok) return socket.emit("error", "لینک/محتوا مجاز نیست.");
     }
 
-    if (
-      type === "audio" &&
-      typeof content === "string" &&
-      content.length > 2_500_000
-    )
-      return socket.emit("error", "فایل صوتی خیلی بزرگ است.");
     if (
       type === "image" &&
       typeof content === "string" &&
@@ -1386,7 +1459,11 @@ io.on("connection", (socket) => {
 
     ensureConversationMaps(conversationId);
     messages[conversationId].push(msg);
-    if (messages[conversationId].length > 100) messages[conversationId].shift();
+    markDirty();
+    const msgLimit = conversationId.includes("_pv_")
+      ? appConfig.maxDmMessages
+      : appConfig.maxChannelMessages;
+    if (messages[conversationId].length > msgLimit) messages[conversationId].shift();
 
     io.to(conversationId).emit("receive_message", msg);
     saveData();
@@ -1406,6 +1483,7 @@ io.on("connection", (socket) => {
       if (idx !== -1) {
         messages[key].splice(idx, 1);
         found = true;
+        markDirty();
         io.to(key).emit("message_deleted", { channel: key, id });
         break;
       }
@@ -1433,3 +1511,23 @@ io.on("connection", (socket) => {
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+// -------------------- Graceful shutdown --------------------
+function gracefulShutdown(signal) {
+  console.log(`\n${signal} received. Shutting down gracefully...`);
+  saveData();
+  io.close(() => {
+    server.close(() => {
+      console.log("Server closed.");
+      process.exit(0);
+    });
+  });
+  // Force exit after 5s if graceful shutdown stalls
+  setTimeout(() => {
+    console.error("Forced shutdown after timeout.");
+    process.exit(1);
+  }, 5000).unref();
+}
+
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));

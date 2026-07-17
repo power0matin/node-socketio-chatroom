@@ -88,11 +88,6 @@ Includes **atomic JSON writes** to reduce corruption risk.
 
 > Add screenshots/gifs under `./assets/` and update links below.
 
-- `assets/login.png`
-- `assets/chat.png`
-
-Example:
-
 ```md
 ![Login](./assets/login.png)
 ![Chat](./assets/chat.png)
@@ -139,7 +134,7 @@ git clone https://github.com/power0matin/node-socketio-chatroom.git
 cd node-socketio-chatroom
 
 npm install
-node server.js
+npm start
 ```
 
 Open:

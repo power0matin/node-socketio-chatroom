@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Verify running under bash (not dash/sh)
+if [[ -z "${BASH_VERSION:-}" ]]; then
+  echo "ERROR: This script requires bash. Run with: bash install.sh"
+  exit 1
+fi
+
 # node-socketio-chatroom - Interactive Installer (Hardened + Enhanced Preflight)
 # App: node-socketio-chatroom
 # Folder: ~/chat-node-socketio-chatroom
@@ -219,8 +225,12 @@ make_backup_tar() {
   [[ -d "$dir" ]] || return 0
   local ts; ts="$(date +%Y%m%d-%H%M%S)"
   local out="${dir}.backup-${ts}.tar.gz"
-  tar -czf "$out" -C "$(dirname "$dir")" "$(basename "$dir")" >/dev/null 2>&1 || true
-  [[ -f "$out" ]] && echo "$out" || true
+  if tar -czf "$out" -C "$(dirname "$dir")" "$(basename "$dir")" >/dev/null 2>&1; then
+    [[ -f "$out" ]] && echo "$out" || true
+  else
+    warn "Backup creation failed. Continuing without backup."
+    return 0
+  fi
 }
 
 safe_rm_dir() {
@@ -1053,6 +1063,17 @@ mkdir -p "$DIR/public" "$DIR/data" "$DIR/public/uploads"
 chmod 700 "$DIR/data" "$DIR/public/uploads"
 cd "$DIR"
 
+# Create favicon.svg
+cat > public/favicon.svg << 'FAVICON_EOF'
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <rect width="100" height="100" rx="20" fill="#2563EB"/>
+  <path d="M25 35 C25 25, 75 25, 75 35 L75 55 C75 65, 25 65, 25 55 Z" fill="white" opacity="0.9"/>
+  <circle cx="38" cy="50" r="5" fill="#2563EB"/>
+  <circle cx="50" cy="50" r="5" fill="#2563EB"/>
+  <circle cx="62" cy="50" r="5" fill="#2563EB"/>
+</svg>
+FAVICON_EOF
+
 cat > package.json << 'EOF'
 {
   "name": "node-socketio-chatroom",
@@ -1094,7 +1115,19 @@ const server = http.createServer(app);
 
 // -------------------- Security headers --------------------
 app.use(helmet({
-  contentSecurityPolicy: false,
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.tailwindcss.com", "https://unpkg.com", "https://cdnjs.cloudflare.com"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://cdnjs.cloudflare.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com"],
+      imgSrc: ["'self'", "data:", "blob:"],
+      mediaSrc: ["'self'", "data:", "blob:"],
+      connectSrc: ["'self'", "ws:", "wss:"],
+      frameSrc: ["'none'"],
+      objectSrc: ["'none'"]
+    }
+  },
   crossOriginEmbedderPolicy: false,
   crossOriginOpenerPolicy: false
 }));
@@ -1213,12 +1246,14 @@ let appConfig = {
   maxFileSizeMB: 50,
   appName: 'node-socketio-chatroom',
   hideUserList: false,
-  allowedOrigins: '*',
+  allowedOrigins: 'http://localhost:3000',
   protectUploads: true,
   dataEncKey: '',
-  // ✅ NEW: channel access policy
-  accessMode: 'restricted', // 'restricted' | 'open'
-  defaultChannelsForNewUsers: [] // e.g. ['General'] if you want
+  accessMode: 'restricted',
+  defaultChannelsForNewUsers: ['General'],
+  maxChannelMessages: 100,
+  maxDmMessages: 500,
+  maxSavedMessages: 1000
 };
 
 function normalizeOrigins(val) {
@@ -1267,6 +1302,18 @@ function loadAndSecureConfig(force = false) {
       appConfig.defaultChannelsForNewUsers = [];
       saveNeeded = true;
     }
+    if (typeof appConfig.maxChannelMessages !== 'number' || appConfig.maxChannelMessages < 10) {
+      appConfig.maxChannelMessages = 100;
+      saveNeeded = true;
+    }
+    if (typeof appConfig.maxDmMessages !== 'number' || appConfig.maxDmMessages < 10) {
+      appConfig.maxDmMessages = 500;
+      saveNeeded = true;
+    }
+    if (typeof appConfig.maxSavedMessages !== 'number' || appConfig.maxSavedMessages < 10) {
+      appConfig.maxSavedMessages = 1000;
+      saveNeeded = true;
+    }
 
     if (saveNeeded) atomicWriteJson(CONFIG_FILE, appConfig, 0o600);
 
@@ -1307,7 +1354,7 @@ const corsOption = (() => {
 })();
 
 const io = new Server(server, {
-  maxHttpBufferSize: 1e8,
+  maxHttpBufferSize: 2e6,
   cors: corsOption
 });
 
@@ -1464,7 +1511,12 @@ function listAccessibleChannels(username, role) {
   return channels.filter(ch => isMember(ch, username));
 }
 
+let dataDirty = false;
+function markDirty() { dataDirty = true; }
+
 function saveData() {
+  if (!dataDirty) return;
+  dataDirty = false;
   try {
     atomicWriteJsonSecure(USERS_FILE, persistentUsers, 0o600);
     atomicWriteJsonSecure(CHANNELS_FILE, channels, 0o600);
@@ -1474,9 +1526,10 @@ function saveData() {
     atomicWriteJsonSecure(ATTACHMENTS_FILE, attachments, 0o600);
   } catch (e) {
     console.error('Error saving data', e);
+    dataDirty = true;
   }
 }
-setInterval(saveData, 30_000).unref();
+setInterval(saveData, 10_000).unref();
 
 // migrate users plaintext -> hash (backward compat)
 (function migrateUsersIfNeeded() {
@@ -1580,6 +1633,11 @@ app.use('/uploads', (req, res, next) => {
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.post('/upload', uploadLimiter, (req, res) => {
+  // CSRF check: verify Origin or Referer header matches server origin
+  const origin = req.headers.origin || req.headers.referer || '';
+  if (origin && !origin.startsWith(req.protocol + '://' + req.get('host')))
+    return res.status(403).json({ error: 'Forbidden: cross-origin upload.' });
+
   const tok = String(req.headers['x-upload-token'] || '');
   const rec = uploadTokens.get(tok);
   if (!rec || rec.exp <= Date.now()) return res.status(401).json({ error: 'Unauthorized upload.' });
@@ -1630,6 +1688,7 @@ function getBannedUsers() {
 
 // -------------------- Login rate limit --------------------
 const loginAttempts = new Map();
+const ipLoginAttempts = new Map();
 
 function getSocketIp(socket) {
   const xf = socket.handshake.headers['x-forwarded-for'];
@@ -1642,40 +1701,51 @@ function loginKey(ip, username) {
 }
 
 function isLoginLimited(ip, username) {
-  const key = loginKey(ip, username);
-  const now = Date.now();
-  const rec = loginAttempts.get(key);
-
   const windowMs = 10 * 60 * 1000;
-  const max = 12;
+  const maxPerUser = 12;
+  const maxPerIp = 30;
 
-  if (!rec) return false;
+  // Per IP limit (brute-force across many usernames)
+  const ipRec = ipLoginAttempts.get(ip);
+  if (ipRec && Date.now() - ipRec.first <= windowMs && ipRec.count >= maxPerIp) return true;
+  if (ipRec && Date.now() - ipRec.first > windowMs) ipLoginAttempts.delete(ip);
 
-  if (now - rec.first > windowMs) {
-    loginAttempts.delete(key);
-    return false;
-  }
+  // Per username+IP limit
+  const key = loginKey(ip, username);
+  const rec = loginAttempts.get(key);
+  if (rec && Date.now() - rec.first <= windowMs && rec.count >= maxPerUser) return true;
+  if (rec && Date.now() - rec.first > windowMs) loginAttempts.delete(key);
 
-  return rec.count >= max;
+  return false;
 }
 
 function recordLoginFail(ip, username) {
-  const key = loginKey(ip, username);
   const now = Date.now();
-  const rec = loginAttempts.get(key);
 
-  if (!rec) {
-    loginAttempts.set(key, { count: 1, first: now, last: now });
-    return;
+  // Record per IP
+  const ipRec = ipLoginAttempts.get(ip);
+  if (!ipRec) {
+    ipLoginAttempts.set(ip, { count: 1, first: now });
+  } else {
+    ipRec.count += 1;
+    ipLoginAttempts.set(ip, ipRec);
   }
 
-  rec.count += 1;
-  rec.last = now;
-  loginAttempts.set(key, rec);
+  // Record per username+IP
+  const key = loginKey(ip, username);
+  const rec = loginAttempts.get(key);
+  if (!rec) {
+    loginAttempts.set(key, { count: 1, first: now, last: now });
+  } else {
+    rec.count += 1;
+    rec.last = now;
+    loginAttempts.set(key, rec);
+  }
 }
 
 function clearLoginFails(ip, username) {
   loginAttempts.delete(loginKey(ip, username));
+  ipLoginAttempts.delete(ip);
 }
 
 setInterval(() => {
@@ -1683,6 +1753,9 @@ setInterval(() => {
   const windowMs = 10 * 60 * 1000;
   for (const [k, v] of loginAttempts.entries()) {
     if (!v || (now - v.first > windowMs)) loginAttempts.delete(k);
+  }
+  for (const [k, v] of ipLoginAttempts.entries()) {
+    if (!v || (now - v.first > windowMs)) ipLoginAttempts.delete(k);
   }
 }, 60_000).unref();
 
@@ -1814,6 +1887,7 @@ io.on('connection', (socket) => {
 
     clearLoginFails(ip, u);
     persistentUsers[u].last_seen = Date.now();
+    markDirty();
 
     const role = persistentUsers[u].role || 'user';
     users[socket.id] = { username: u, role };
@@ -1900,7 +1974,7 @@ socket.on('join_private', (targetUser, cb) => {
 
   if (messages[sid].length !== before) {
     io.to(sid).emit('message_deleted', { channel: sid, id });
-    saveData();
+    markDirty();
   }
 });
 
@@ -1950,7 +2024,8 @@ socket.on('join_private', (targetUser, cb) => {
     };
 
     messages[sid].push(msg);
-    if (messages[sid].length > 1000) messages[sid].shift();
+    markDirty();
+    if (messages[sid].length > appConfig.maxSavedMessages) messages[sid].shift();
 
     // اگر الان داخل saved هست همزمان می‌بیند
     io.to(sid).emit('receive_message', msg);
@@ -1967,7 +2042,12 @@ socket.on('join_private', (targetUser, cb) => {
     const clean = cleanChannelName(channelName);
     if (!clean) return;
 
+    // Reject reserved names that collide with DM or Saved Message IDs
+    if (clean.includes('_pv_') || clean.startsWith('__saved__'))
+      return socket.emit('error', 'نام کانال رزرو شده است.');
+
     if (!channels.includes(clean)) channels.push(clean);
+    markDirty();
     ensurePublicConversation(clean, user.username);
 
     // creator gets access in restricted mode
@@ -1996,6 +2076,7 @@ socket.on('join_private', (targetUser, cb) => {
     if (!clean || clean === 'General') return;
 
     channels = channels.filter(c => c !== clean);
+    markDirty();
 
     delete conversations[clean];
     delete memberships[clean];
@@ -2069,6 +2150,7 @@ socket.on('join_private', (targetUser, cb) => {
 
     if (okAllow) addMember(ch, t, 'member');
     else removeMember(ch, t);
+    markDirty();
 
     saveData();
 
@@ -2106,10 +2188,12 @@ socket.on('join_private', (targetUser, cb) => {
     if (!persistentUsers[t]) return;
 
     persistentUsers[t].isBanned = true;
+  markDirty();
 
     for (const key of Object.keys(messages)) {
       if (Array.isArray(messages[key])) messages[key] = messages[key].filter(m => m.sender !== t);
     }
+    markDirty();
 
     saveData();
     io.emit('bulk_delete_user', t);
@@ -2132,6 +2216,7 @@ socket.on('join_private', (targetUser, cb) => {
     const t = cleanUsername(targetUsername);
     if (persistentUsers[t]) {
       persistentUsers[t].isBanned = false;
+      markDirty();
       saveData();
       socket.emit('action_success', `کاربر ${t} آزاد شد.`);
       socket.emit('banned_list', getBannedUsers());
@@ -2152,6 +2237,7 @@ socket.on('join_private', (targetUser, cb) => {
     const t = cleanUsername(targetUsername);
     if (persistentUsers[t] && ['user', 'vip'].includes(role)) {
       persistentUsers[t].role = role;
+      markDirty();
       saveData();
 
       const targetSocketId = Object.keys(users).find(id => users[id].username === t);
@@ -2239,14 +2325,11 @@ socket.on('join_private', (targetUser, cb) => {
 
     if (type !== 'text') {
       if (!content) return socket.emit('error', 'محتوای پیام نامعتبر است.');
-      const ok =
-        isSafeUploadsUrl(content) ||
-        isSafeDataUrl(content, type);
+      const ok = isSafeUploadsUrl(content);
 
       if (!ok) return socket.emit('error', 'لینک/محتوا مجاز نیست.');
     }
 
-    if (type === 'audio' && typeof content === 'string' && content.length > 2_500_000) return socket.emit('error', 'فایل صوتی خیلی بزرگ است.');
     if (type === 'image' && typeof content === 'string' && content.length > 3_500_000) return socket.emit('error', 'تصویر خیلی بزرگ است.');
     if (type === 'video' && typeof content === 'string' && content.length > 5_000_000) return socket.emit('error', 'ویدیو خیلی بزرگ است.');
 
@@ -2266,7 +2349,11 @@ socket.on('join_private', (targetUser, cb) => {
 
     ensureConversationMaps(conversationId);
     messages[conversationId].push(msg);
-    if (messages[conversationId].length > 100) messages[conversationId].shift();
+    markDirty();
+    const msgLimit = conversationId.includes('_pv_')
+      ? appConfig.maxDmMessages
+      : appConfig.maxChannelMessages;
+    if (messages[conversationId].length > msgLimit) messages[conversationId].shift();
 
     io.to(conversationId).emit('receive_message', msg);
     saveData();
@@ -2286,6 +2373,7 @@ socket.on('join_private', (targetUser, cb) => {
       if (idx !== -1) {
         messages[key].splice(idx, 1);
         found = true;
+        markDirty();
         io.to(key).emit('message_deleted', { channel: key, id });
         break;
       }
@@ -2312,6 +2400,24 @@ server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
+// -------------------- Graceful shutdown --------------------
+function gracefulShutdown(signal) {
+  console.log(`\n${signal} received. Shutting down gracefully...`);
+  saveData();
+  io.close(() => {
+    server.close(() => {
+      console.log('Server closed.');
+      process.exit(0);
+    });
+  });
+  setTimeout(() => {
+    console.error('Forced shutdown after timeout.');
+    process.exit(1);
+  }, 5000).unref();
+}
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
 EOF
 
 # index.html (Client)
@@ -2323,8 +2429,9 @@ cat > public/index.html << 'EOF'
 <head>
   <meta charset="UTF-8">
   <meta name="viewport"
-    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>__APP_NAME_PLACEHOLDER__</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap" rel="stylesheet">
   <script src="/socket.io/socket.io.js"></script>
@@ -2745,7 +2852,7 @@ cat > public/index.html << 'EOF'
         </div>
 
             <!-- Messages -->
-            <div class="flex-1 overflow-y-auto p-4 space-y-2 min-h-0" id="messages-container" ref="msgContainer">
+            <div class="flex-1 overflow-y-auto p-4 pb-28 space-y-2 min-h-0" id="messages-container" ref="msgContainer">
 
             <div v-for="msg in messages" :key="msg.id"
                 :class="['flex w-full', msg.sender === user.username ? 'justify-end' : 'justify-start']"
@@ -3129,7 +3236,9 @@ const canSend = computed(() => {
             const c = document.getElementById('messages-container');
             if (!c) return;
             if (force) { c.scrollTop = c.scrollHeight; return; }
-            c.scrollTop = c.scrollHeight;
+            // only auto-scroll if user is already near bottom
+            const isNearBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 150;
+            if (isNearBottom) c.scrollTop = c.scrollHeight;
           });
         };
 
@@ -3388,8 +3497,28 @@ const startPrivateChat = (targetUsername) => {
         const showContext = (e, msg) => { contextMenu.value = { visible: true, x: e.pageX, y: e.pageY, target: msg, type: 'message' }; };
         const showUserContext = (e, targetUsername) => { contextMenu.value = { visible: true, x: e.pageX, y: e.pageY, target: targetUsername, type: 'user' }; };
 
-        socket.on('connect', () => { isConnected.value = true; });
+        socket.on('connect', () => {
+          isConnected.value = true;
+          // Auto-rejoin current channel after reconnect
+          if (isLoggedIn.value && currentChannel.value) {
+            if (isSavedView.value) {
+              socket.emit('join_saved');
+            } else if (isPrivateChat.value) {
+              const dmTarget = String(currentChannel.value).split('_pv_').find(u => u !== user.value.username);
+              if (dmTarget) socket.emit('join_private', dmTarget);
+            } else {
+              socket.emit('join_channel', currentChannel.value);
+            }
+          }
+        });
         socket.on('disconnect', () => { isConnected.value = false; });
+        socket.on('connect_error', (err) => {
+          console.error('Socket connection error:', err.message);
+          if (!isLoggedIn.value) {
+            error.value = 'خطا در اتصال به سرور. لطفا دوباره تلاش کنید.';
+            isAuthBusy.value = false;
+          }
+        });
 
         // --- Socket Events ---
         socket.on('login_success', (data) => {
@@ -3584,19 +3713,31 @@ const startPrivateChat = (targetUsername) => {
               mediaRecorder.ondataavailable = event => audioChunks.push(event.data);
               mediaRecorder.onstop = () => {
                 const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                const reader = new FileReader();
-                reader.readAsDataURL(audioBlob);
-                reader.onloadend = () => {
-                  socket.emit('send_message', {
-                    text: '',
-                    type: 'audio',
-                    content: reader.result,
-                    channel: currentChannel.value,
-                    conversationId: currentChannel.value,
-                    replyTo: replyingTo.value
-                  });
-                  replyingTo.value = null;
+                // Upload via /upload endpoint instead of sending data URL
+                const formData = new FormData();
+                formData.append('file', audioBlob, 'recording.webm');
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', '/upload', true);
+                if (uploadToken.value) xhr.setRequestHeader('X-Upload-Token', uploadToken.value);
+                xhr.onload = () => {
+                  try {
+                    if (xhr.status === 200) {
+                      const res = JSON.parse(xhr.responseText);
+                      const securedUrl = uploadToken.value ? (res.url + '?t=' + encodeURIComponent(uploadToken.value)) : res.url;
+                      socket.emit('send_message', {
+                        text: '',
+                        type: 'audio',
+                        content: securedUrl,
+                        channel: currentChannel.value,
+                        conversationId: currentChannel.value,
+                        replyTo: replyingTo.value
+                      });
+                      replyingTo.value = null;
+                    }
+                  } catch (e) { console.error(e); }
                 };
+                xhr.onerror = () => console.error('Audio upload failed');
+                xhr.send(formData);
               };
               mediaRecorder.start();
               isRecording.value = true;
@@ -3713,9 +3854,13 @@ fi
 
 json_escape() {
   # Escape JSON string safely:
-  # - remove newlines
-  # - escape backslash and double-quote
-  printf '%s' "$1" | tr -d '\r\n' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+  # - remove carriage returns and newlines
+  # - escape backslash, double-quote, and control characters (tab, etc.)
+  printf '%s' "$1" | tr -d '\r\n' | sed \
+    -e 's/\\/\\\\/g' \
+    -e 's/"/\\"/g' \
+    -e 's/\t/\\t/g' \
+    -e 's/\x1b/\\u001b/g'
 }
 
 cat > data/config.json <<EOF

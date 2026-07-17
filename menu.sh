@@ -4,7 +4,6 @@ set -Eeuo pipefail
 cleanup() { true; }
 trap cleanup EXIT
 
-APP_NAME="HyperSentry"
 DIR_DEFAULT="$HOME/chat-node-socketio-chatroom"
 MANAGER_BIN="/usr/local/bin/node-socketio-chatroom"
 
@@ -12,6 +11,22 @@ REPO_URL="https://github.com/power0matin/node-socketio-chatroom.git"
 BRANCH="main"
 
 INSTALL_URL="https://raw.githubusercontent.com/power0matin/node-socketio-chatroom/main/install.sh"
+
+# Detect APP_NAME from config or use default
+detect_app_name() {
+  local config="$DIR_DEFAULT/data/config.json"
+  if [[ -f "$config" ]]; then
+    local name
+    name="$(node -e "try{const d=JSON.parse(require('fs').readFileSync('$config','utf8'));process.stdout.write(d.appName||'')}catch{}" 2>/dev/null || true)"
+    if [[ -n "$name" ]]; then
+      echo "$name"
+      return
+    fi
+  fi
+  echo "node-socketio-chatroom"
+}
+
+APP_NAME="$(detect_app_name)"
 
 pause() { read -r -p "Press Enter..." ; }
 
@@ -25,7 +40,8 @@ ensure_deps() {
 }
 
 is_installed() {
-  [[ -d "$DIR_DEFAULT" && -f "$DIR_DEFAULT/server.js" && -d "$DIR_DEFAULT/data" ]]
+  [[ -d "$DIR_DEFAULT" && -d "$DIR_DEFAULT/data" && \
+     ( -f "$DIR_DEFAULT/server.js" || -f "$DIR_DEFAULT/src/server.js" ) ]]
 }
 
 manager_exists() {
