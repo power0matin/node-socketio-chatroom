@@ -75,14 +75,20 @@ Includes **atomic JSON writes** to reduce corruption risk.
 
 ### 🔒 Security Hardening
 
-- `helmet` enabled
-  - CSP kept **disabled** to preserve CDN + inline scripts in the current UI
+- **HTTPS by default** — auto-generates self-signed cert (requires `openssl`) or falls back to HTTP; use `TLS_CERT_FILE`/`TLS_KEY_FILE` env vars for real certs, or `NO_TLS=1` behind a reverse proxy
+- **Data-at-rest encryption** — AES-256-GCM for all JSON persistence files; encryption key auto-generated on first run and stored in `data/.data-key`
+- `helmet` with strict CSP (no `'unsafe-inline'` for scripts)
+- `Strict-Transport-Security` (HSTS) with preload
+- `Permissions-Policy` — disables camera, microphone, geolocation
 - `X-Content-Type-Options: nosniff`
+- `X-Frame-Options: DENY`
+- `Referrer-Policy: strict-origin-when-cross-origin`
 - JSON body limit (`10kb`)
 - Input sanitization (`xss`)
-- Password hashing with `bcryptjs`
-- Upload protection (token + allowlists + limits)
+- Password hashing with `bcryptjs` (12 rounds)
+- Upload protection (token + allowlists + limits, 1-hour token expiry)
 - Message rate-limiting (anti-spam)
+- Login rate-limiting (brute-force protection)
 
 ## 📸 Screenshots
 
@@ -231,7 +237,7 @@ data/config.json
 | `hideUserList`               | boolean                | Hide online users list from normal users                                |
 | `allowedOrigins`             | `*` or string/array    | Socket.IO CORS allowlist (`*` or comma-separated / array)               |
 | `protectUploads`             | boolean                | If `true`, downloads require token (`?t=...` or `X-Upload-Token`)       |
-| `dataEncKey`                 | string (hex, 64 chars) | AES-256-GCM key for encrypting JSON at rest (optional but recommended)  |
+| `dataEncKey`                 | string (hex, 64 chars) | AES-256-GCM key for encrypting JSON at rest (auto-generated if empty)   |
 | `accessMode`                 | `restricted` \| `open` | Channel policy: restricted needs membership; open allows all            |
 | `defaultChannelsForNewUsers` | array of strings       | Auto-grant membership to new users (only meaningful in restricted mode) |
 
@@ -239,7 +245,7 @@ data/config.json
 
 ## 🔐 Upload Tokens
 
-After login, the server issues a temporary **upload token** (default **6 hours**).
+After login, the server issues a temporary **upload token** (default **1 hour**).
 
 - Upload request must include header: `X-Upload-Token: <token>`
 - When `protectUploads: true`, file URLs should include: `?t=<token>`
@@ -249,6 +255,16 @@ This prevents:
 
 - anonymous upload abuse
 - public access to uploaded files (when protection is enabled)
+
+## 🔑 Environment Variables
+
+| Variable          | Description                                          |
+| ----------------- | ---------------------------------------------------- |
+| `PORT`            | Server port (default: `3000`)                        |
+| `NO_TLS`          | Set to `1` to disable HTTPS (for reverse proxy)      |
+| `TLS_CERT_FILE`   | Path to TLS certificate file                         |
+| `TLS_KEY_FILE`    | Path to TLS private key file                         |
+| `DATA_ENC_KEY`    | Override the auto-generated data encryption key       |
 
 ## 🌐 Reverse Proxy (Nginx)
 

@@ -1,5 +1,6 @@
 const express = require("express");
 const http = require("http");
+const https = require("https");
 const { Server } = require("socket.io");
 const path = require("path");
 const fs = require("fs");
@@ -13,7 +14,75 @@ const crypto = require("crypto");
 const app = express();
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
-const server = http.createServer(app);
+
+// -------------------- HTTPS (auto self-signed or env certs) --------------------
+let server;
+const CERT_DIR = path.join(__dirname, "..", "certs");
+const CERT_FILE = path.join(CERT_DIR, "cert.pem");
+const KEY_FILE = path.join(CERT_DIR, "key.pem");
+const { execSync } = require("child_process");
+
+function generateSelfSignedCert() {
+  if (!fs.existsSync(CERT_DIR))
+    fs.mkdirSync(CERT_DIR, { recursive: true, mode: 0o700 });
+
+  try {
+    execSync(
+      `openssl req -x509 -newkey rsa:2048 -nodes -keyout "${KEY_FILE}" -out "${CERT_FILE}" -days 365 -subj "/CN=chatroom-local"`,
+      { stdio: "pipe" },
+    );
+    fs.chmodSync(KEY_FILE, 0o600);
+    fs.chmodSync(CERT_FILE, 0o600);
+    console.log("[HTTPS] Self-signed certificate generated via openssl");
+    return true;
+  } catch (e) {
+    // Try with Node.js child_process fallback
+    console.warn("[HTTPS] openssl not available, cannot generate self-signed cert");
+    return false;
+  }
+}
+
+function ensureTLS() {
+  // Allow disabling TLS via env (e.g. behind a reverse proxy)
+  if (process.env.NO_TLS === "1" || process.env.HTTPS_DISABLED === "1") {
+    console.log("[HTTP] TLS disabled via environment variable");
+    return http.createServer(app);
+  }
+
+  // Allow providing own certs via env
+  const envCert = process.env.TLS_CERT_FILE;
+  const envKey = process.env.TLS_KEY_FILE;
+
+  if (envCert && envKey && fs.existsSync(envCert) && fs.existsSync(envKey)) {
+    console.log("[HTTPS] Using certificates from environment");
+    return https.createServer(
+      { cert: fs.readFileSync(envCert), key: fs.readFileSync(envKey) },
+      app,
+    );
+  }
+
+  // Auto-generate self-signed cert if not present
+  if (!fs.existsSync(CERT_FILE) || !fs.existsSync(KEY_FILE)) {
+    if (!generateSelfSignedCert()) {
+      console.log("[HTTP] Falling back to plain HTTP (no TLS)");
+      return http.createServer(app);
+    }
+  }
+
+  try {
+    const options = {
+      cert: fs.readFileSync(CERT_FILE),
+      key: fs.readFileSync(KEY_FILE),
+    };
+    console.log("[HTTPS] Server running with TLS");
+    return https.createServer(options, app);
+  } catch (e) {
+    console.error("[HTTPS] Failed to load certificates, falling back to HTTP:", e.message);
+    return http.createServer(app);
+  }
+}
+
+server = ensureTLS();
 
 // -------------------- Security headers --------------------
 app.use(
@@ -40,6 +109,8 @@ app.use(
         connectSrc: ["'self'", "ws:", "wss:"],
         frameSrc: ["'none'"],
         objectSrc: ["'none'"],
+        baseUri: ["'self'"],
+        formAction: ["'self'"],
       },
     },
     crossOriginEmbedderPolicy: false,
@@ -49,8 +120,14 @@ app.use(
 
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("Referrer-Policy", "same-origin");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  res.setHeader("X-XSS-Protection", "0"); // Disable legacy XSS filter (CSP is better)
+  // HSTS: 1 year, include subdomains, preload-ready
+  if (req.protocol === "https" || req.headers["x-forwarded-proto"] === "https") {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
+  }
   next();
 });
 
@@ -168,6 +245,31 @@ function atomicWriteJsonSecure(file, obj, mode = 0o600) {
 }
 
 // -------------------- Config --------------------
+const DATA_KEY_FILE = path.join(DATA_DIR, ".data-key");
+
+function getOrCreateDataEncKey() {
+  // Check env first
+  if (process.env.DATA_ENC_KEY) return process.env.DATA_ENC_KEY;
+
+  // Check dedicated key file (survives config resets)
+  try {
+    if (fs.existsSync(DATA_KEY_FILE)) {
+      const key = fs.readFileSync(DATA_KEY_FILE, "utf8").trim();
+      if (keyFromHex(key)) return key;
+    }
+  } catch {}
+
+  // Auto-generate and persist
+  const newKey = crypto.randomBytes(32).toString("hex");
+  try {
+    fs.writeFileSync(DATA_KEY_FILE, newKey, { mode: 0o600 });
+    console.log("[SECURITY] Auto-generated data encryption key:", DATA_KEY_FILE);
+  } catch (e) {
+    console.error("[SECURITY] Failed to persist data key file:", e.message);
+  }
+  return newKey;
+}
+
 let appConfig = {
   adminUser: "admin",
   adminPassHash: "",
@@ -177,7 +279,6 @@ let appConfig = {
   hideUserList: false,
   allowedOrigins: "http://localhost:3000",
   protectUploads: true,
-  dataEncKey: "",
   accessMode: "restricted", // 'restricted' | 'open'
   defaultChannelsForNewUsers: ["General"],
   maxChannelMessages: 100,
@@ -282,6 +383,9 @@ function loadAndSecureConfig(force = false) {
 }
 
 loadAndSecureConfig(true);
+
+// Auto-generate encryption key if not configured
+appConfig.dataEncKey = getOrCreateDataEncKey();
 
 const PORT = Number(process.env.PORT || appConfig.port || 3000);
 
@@ -865,7 +969,7 @@ io.on("connection", (socket) => {
       const uploadToken = crypto.randomBytes(24).toString("hex");
       uploadTokens.set(uploadToken, {
         username: u,
-        exp: Date.now() + 6 * 60 * 60 * 1000,
+        exp: Date.now() + 1 * 60 * 60 * 1000,
       });
 
       for (const ch of channels) ensurePublicConversation(ch, "system");
@@ -938,7 +1042,7 @@ io.on("connection", (socket) => {
     const uploadToken = crypto.randomBytes(24).toString("hex");
     uploadTokens.set(uploadToken, {
       username: u,
-      exp: Date.now() + 6 * 60 * 60 * 1000,
+      exp: Date.now() + 1 * 60 * 60 * 1000,
     });
 
     for (const ch of channels) ensurePublicConversation(ch, "system");

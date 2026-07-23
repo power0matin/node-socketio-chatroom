@@ -3,3 +3,4 @@ public/uploads/
 node_modules/
 backup/
 .update.lock
+certs/
