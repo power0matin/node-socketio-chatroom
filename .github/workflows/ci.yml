@@ -75,8 +75,18 @@ jobs:
           test "$(node -p 'require(process.argv[1]).version' /tmp/node-socketio-chatroom-ci/package.json)" = "1.11.0"
       - name: Start installed runtime and verify graceful shutdown
         run: |
-          rm -f /tmp/chatroom-ci.log /tmp/chatroom-ci.pid
-          sudo -u chatroomci bash -c 'echo $$ > /tmp/chatroom-ci.pid; exec env BACKUP_ROOT=/tmp/node-socketio-chatroom-backups-ci node /tmp/node-socketio-chatroom-ci/src/server.js' > /tmp/chatroom-ci.log 2>&1 &
+          rm -f /tmp/chatroom-ci.log
+          sudo -u chatroomci env \
+            BACKUP_ROOT=/tmp/node-socketio-chatroom-backups-ci \
+            bash -s <<'RUNTIME'
+          set -Eeuo pipefail
+          node /tmp/node-socketio-chatroom-ci/src/server.js > /tmp/chatroom-ci.log 2>&1 &
+          node_pid=$!
+          cleanup() {
+            if kill -0 "$node_pid" 2>/dev/null; then kill -KILL "$node_pid" 2>/dev/null || true; fi
+          }
+          trap cleanup EXIT
+
           ready=0
           for _ in {1..30}; do
             if curl --fail --silent http://127.0.0.1:31888/readyz >/dev/null; then ready=1; break; fi
@@ -84,20 +94,23 @@ jobs:
           done
           if [[ "$ready" != "1" ]]; then cat /tmp/chatroom-ci.log; exit 1; fi
           curl --fail --silent http://127.0.0.1:31888/healthz
-          test -s /tmp/chatroom-ci.pid
-          node_pid="$(cat /tmp/chatroom-ci.pid)"
-          sudo kill -TERM "$node_pid"
-          completed=0
-          for _ in {1..15}; do
-            if grep -q 'graceful shutdown completed' /tmp/chatroom-ci.log; then completed=1; break; fi
-            sleep 1
-          done
-          if [[ "$completed" != "1" ]]; then cat /tmp/chatroom-ci.log; exit 1; fi
+
+          kill -TERM "$node_pid"
+          if ! wait "$node_pid"; then
+            status=$?
+            cat /tmp/chatroom-ci.log
+            echo "Installed runtime exited with status $status after SIGTERM" >&2
+            exit "$status"
+          fi
+          trap - EXIT
+
+          grep -q 'graceful shutdown completed' /tmp/chatroom-ci.log
           if curl --fail --silent http://127.0.0.1:31888/healthz >/dev/null 2>&1; then
             cat /tmp/chatroom-ci.log
             exit 1
           fi
           test -f /tmp/node-socketio-chatroom-ci/data/state.json
+          RUNTIME
       - name: Safe uninstall retains verified backup
         run: |
           sudo env \
