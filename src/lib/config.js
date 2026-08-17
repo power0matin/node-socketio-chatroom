@@ -1,7 +1,5 @@
 'use strict';
 
-const fs = require('fs');
-const fsp = fs.promises;
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const { atomicWriteJson, readJsonStrict } = require('./storage');
@@ -104,6 +102,7 @@ function validateConfig(input) {
   if (!Array.isArray(cfg.defaultChannelsForNewUsers)) throw new ConfigError('defaultChannelsForNewUsers must be an array.');
   cfg.defaultChannelsForNewUsers = cfg.defaultChannelsForNewUsers.map((v) => String(v).trim()).filter(Boolean).slice(0, 100);
   delete cfg.adminPass;
+  delete cfg.dataEncKey;
   return cfg;
 }
 
@@ -112,6 +111,9 @@ async function loadConfig(dataDir, env = process.env) {
   let raw = await readJsonStrict(file, { missing: null });
   let changed = false;
   if (!raw) { raw = { ...DEFAULTS }; changed = true; }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new ConfigError('config.json must contain a JSON object.');
+
+  const legacyDataEncKey = Object.prototype.hasOwnProperty.call(raw, 'dataEncKey') ? raw.dataEncKey : undefined;
 
   if (raw.adminPass && !raw.adminPassHash) {
     raw.adminPassHash = await bcrypt.hash(String(raw.adminPass), 12);
@@ -130,11 +132,10 @@ async function loadConfig(dataDir, env = process.env) {
   if (env.TRUST_PROXY !== undefined) merged.trustProxy = env.TRUST_PROXY === '1';
   const cfg = validateConfig(merged);
 
-  // dataEncKey is legacy-only and must not be re-persisted after migration.
-  if (Object.prototype.hasOwnProperty.call(raw, 'dataEncKey')) changed = true;
+  if (legacyDataEncKey !== undefined) changed = true;
   const persistable = { ...cfg };
   if (changed || JSON.stringify(persistable) !== JSON.stringify(raw)) await atomicWriteJson(file, persistable, 0o600);
-  return { config: cfg, file };
+  return { config: cfg, file, legacyDataEncKey };
 }
 
 async function saveConfig(file, config) {
