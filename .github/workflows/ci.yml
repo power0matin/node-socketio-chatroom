@@ -53,6 +53,7 @@ jobs:
       - name: Runtime smoke test
         run: npm run smoke
       - name: Real browser CSP smoke test
+        if: matrix.node == '22'
         run: npm run browser-smoke
       - name: Dependency security audit
         run: npm audit --audit-level=high
