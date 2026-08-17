@@ -2,6 +2,11 @@
 node_modules/
 coverage/
 
+# Generated frontend bundles (recreated by npm run build)
+public/assets/tailwind.css
+public/assets/render.js
+public/vendor/
+
 # Runtime persistence and user content
 data/
 public/uploads/
