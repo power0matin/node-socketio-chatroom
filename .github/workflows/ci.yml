@@ -37,6 +37,15 @@ jobs:
         run: npm run smoke
       - name: Dependency security audit
         run: npm audit --audit-level=high
+      - name: Dependency freshness report
+        shell: bash
+        run: |
+          set +e
+          npm outdated
+          status=$?
+          set -e
+          # npm uses status 1 when outdated packages are reported. Any status >1 is a real tool/network failure.
+          if (( status > 1 )); then exit "$status"; fi
 
   clean-install:
     name: Clean install + runtime + uninstall
