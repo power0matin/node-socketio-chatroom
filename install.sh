@@ -27,10 +27,14 @@ command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required."
 
 NODE_MAJOR="$(node -p 'Number(process.versions.node.split(".")[0])')"
 NPM_MAJOR="$(npm -v | cut -d. -f1)"
-(( NODE_MAJOR >= 20 )) || fail "Node.js >=20 is required; found $(node -v)."
-(( NPM_MAJOR >= 10 )) || fail "npm >=10 is required; found $(npm -v)."
-[[ "$PORT" =~ ^[0-9]+$ ]] && (( PORT >= 1 && PORT <= 65535 )) || fail "PORT must be between 1 and 65535."
-node -e 'const u=new URL(process.argv[1]); if(!/^https?:$/.test(u.protocol)||u.pathname!=="/"||u.search||u.hash) process.exit(1)' "$PUBLIC_ORIGIN" || fail "PUBLIC_ORIGIN must be an explicit http(s) origin with no path."
+if (( NODE_MAJOR < 20 )); then fail "Node.js >=20 is required; found $(node -v)."; fi
+if (( NPM_MAJOR < 10 )); then fail "npm >=10 is required; found $(npm -v)."; fi
+if ! [[ "$PORT" =~ ^[0-9]+$ ]] || (( PORT < 1 || PORT > 65535 )); then
+  fail "PORT must be between 1 and 65535."
+fi
+if ! node -e 'const u=new URL(process.argv[1]); if(!/^https?:$/.test(u.protocol)||u.pathname!=="/"||u.search||u.hash) process.exit(1)' "$PUBLIC_ORIGIN"; then
+  fail "PUBLIC_ORIGIN must be an explicit http(s) origin with no path."
+fi
 
 safe_install_path() {
   local raw="$1" resolved parent
@@ -46,17 +50,23 @@ safe_install_path() {
 }
 
 INSTALL_DIR="$(safe_install_path "$INSTALL_DIR")" || fail "Unsafe INSTALL_DIR: $INSTALL_DIR"
+case "$INSTALL_DIR" in
+  "$SCRIPT_DIR"|"$SCRIPT_DIR"/*) fail "INSTALL_DIR must not be inside the source checkout." ;;
+esac
+case "$SCRIPT_DIR" in
+  "$INSTALL_DIR"/*) fail "Source checkout must not be inside INSTALL_DIR." ;;
+esac
 BACKUP_ROOT="$(realpath -m -- "$BACKUP_ROOT")"
 [[ "$BACKUP_ROOT" != "$INSTALL_DIR" && "$BACKUP_ROOT" != "$INSTALL_DIR"/* ]] || fail "BACKUP_ROOT must be outside INSTALL_DIR."
 
 if [[ -e "$INSTALL_DIR" ]]; then
-  [[ -f "$INSTALL_DIR/.chatroom-install" ]] && fail "An installation already exists at $INSTALL_DIR. Use scripts/update.sh instead."
-  [[ -z "$(find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]] || fail "INSTALL_DIR exists and is not empty; refusing to overwrite unrelated data."
+  if [[ -f "$INSTALL_DIR/.chatroom-install" ]]; then fail "An installation already exists at $INSTALL_DIR. Use scripts/update.sh instead."; fi
+  if [[ -n "$(find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+    fail "INSTALL_DIR exists and is not empty; refusing to overwrite unrelated data."
+  fi
 fi
 
-if ! getent group "$INSTALL_GROUP" >/dev/null 2>&1; then
-  groupadd --system "$INSTALL_GROUP"
-fi
+if ! getent group "$INSTALL_GROUP" >/dev/null 2>&1; then groupadd --system "$INSTALL_GROUP"; fi
 if ! id "$INSTALL_USER" >/dev/null 2>&1; then
   useradd --system --gid "$INSTALL_GROUP" --home-dir "$INSTALL_DIR" --shell /usr/sbin/nologin "$INSTALL_USER"
 fi
@@ -64,7 +74,9 @@ fi
 PARENT_DIR="$(dirname -- "$INSTALL_DIR")"
 mkdir -p -- "$PARENT_DIR" "$BACKUP_ROOT"
 STAGE_DIR="$(mktemp -d "${PARENT_DIR}/.${PROJECT_ID}.install.XXXXXX")"
-cleanup() { rm -rf -- "$STAGE_DIR"; }
+cleanup() {
+  if [[ -n "${STAGE_DIR:-}" && -d "$STAGE_DIR" ]]; then rm -rf -- "$STAGE_DIR"; fi
+}
 trap cleanup EXIT
 
 info "Copying the exact checked-out source tree"
@@ -83,6 +95,7 @@ info "Installing exact production dependencies from package-lock.json"
 (
   cd "$STAGE_DIR"
   npm ci --omit=dev --ignore-scripts
+  npm audit --omit=dev --audit-level=high
 )
 
 mkdir -p -- "$STAGE_DIR/data" "$STAGE_DIR/public/uploads"
@@ -90,7 +103,7 @@ printf '%s\n' "$PROJECT_ID" > "$STAGE_DIR/.chatroom-install"
 chmod 600 "$STAGE_DIR/.chatroom-install"
 
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-$(node -e 'process.stdout.write(require("crypto").randomBytes(18).toString("base64url"))')}"
-[[ ${#ADMIN_PASSWORD} -ge 12 ]] || fail "ADMIN_PASSWORD must be at least 12 characters."
+if (( ${#ADMIN_PASSWORD} < 12 )); then fail "ADMIN_PASSWORD must be at least 12 characters."; fi
 ADMIN_HASH="$(cd "$STAGE_DIR" && ADMIN_PASSWORD="$ADMIN_PASSWORD" node -e 'require("bcryptjs").hash(process.env.ADMIN_PASSWORD,12).then(v=>process.stdout.write(v))')"
 
 ADMIN_HASH="$ADMIN_HASH" PORT="$PORT" PUBLIC_ORIGIN="$PUBLIC_ORIGIN" node <<'NODE' > "$STAGE_DIR/data/config.json"
@@ -154,13 +167,11 @@ else
     fi
     sleep 1
   done
-  if [[ "$ready" != "1" ]]; then
-    systemctl status "$SERVICE_NAME" --no-pager >&2 || :
-    fail "Service did not become ready. Installation is not being reported as successful."
-  fi
+  if [[ "$ready" != "1" ]]; then fail "Service did not become ready. Installation is not being reported as successful."; fi
 fi
 
 trap - EXIT
-info "Installation completed from repository version $(node -p "require('$INSTALL_DIR/package.json').version")"
+VERSION="$(node -p 'require(process.argv[1]).version' "$INSTALL_DIR/package.json")"
+info "Installation completed from repository version $VERSION"
 printf 'Admin username: admin\nAdmin password: %s\n' "$ADMIN_PASSWORD"
 printf 'Backend: http://127.0.0.1:%s (use Nginx HTTPS termination for production)\n' "$PORT"
