@@ -68,7 +68,7 @@ jobs:
           if (( status > 1 )); then exit "$status"; fi
 
   clean-install:
-    name: Clean install + runtime + uninstall
+    name: Clean install + runtime + uninstall + rollback
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -146,6 +146,44 @@ jobs:
           (( ${#archives[@]} >= 1 ))
           archive="${archives[0]}"
           sudo sha256sum --check "$archive.sha256"
+      - name: Failed service activation rolls back the new install
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          fake_bin=/tmp/chatroom-fake-systemctl
+          install_dir=/tmp/node-socketio-chatroom-ci-failure
+          backup_root=/tmp/node-socketio-chatroom-backups-ci-failure
+          service_name=node-socketio-chatroom-ci-failure.service
+          mkdir -p "$fake_bin"
+          cat > "$fake_bin/systemctl" <<'SYSTEMCTL'
+          #!/usr/bin/env bash
+          set -u
+          case "${1:-}" in
+            daemon-reload|disable|stop) exit 0 ;;
+            enable) exit 42 ;;
+            *) exit 0 ;;
+          esac
+          SYSTEMCTL
+          chmod +x "$fake_bin/systemctl"
+
+          set +e
+          sudo env \
+            PATH="$fake_bin:$PATH" \
+            INSTALL_DIR="$install_dir" \
+            BACKUP_ROOT="$backup_root" \
+            INSTALL_USER=chatroomci \
+            INSTALL_GROUP=chatroomci \
+            SERVICE_NAME="$service_name" \
+            PORT=31889 \
+            PUBLIC_ORIGIN=http://127.0.0.1:31889 \
+            ADMIN_PASSWORD='CI-Rollback-Password-123!' \
+            ./install.sh
+          status=$?
+          set -e
+
+          test "$status" -ne 0
+          test ! -e "$install_dir"
+          test ! -e "/etc/systemd/system/$service_name"
 
   shell:
     name: Shell + systemd safety
