@@ -38,6 +38,26 @@ function findBrowser() {
 
 function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
+async function stopBrowserProcess(child) {
+  if (!child) return;
+  if (child.exitCode === null && child.signalCode === null) {
+    child.kill('SIGTERM');
+    await Promise.race([
+      new Promise((resolve) => child.once('exit', resolve)),
+      delay(2000),
+    ]);
+  }
+  if (child.exitCode === null && child.signalCode === null) {
+    child.kill('SIGKILL');
+    await Promise.race([
+      new Promise((resolve) => child.once('exit', resolve)),
+      delay(2000),
+    ]);
+  }
+  // Chrome can release profile files slightly after the main process exit event.
+  await delay(200);
+}
+
 function launchBrowser(browser, profileDir) {
   return new Promise((resolve, reject) => {
     const child = spawn(browser, [
@@ -266,17 +286,10 @@ async function main() {
     const inspected = await inspectPage(browser, url);
     console.log(`PASS headless browser rendered Vue UI under CSP using ${executable} (${inspected.domLength} DOM bytes)`);
   } finally {
-    if (browserProcess && browserProcess.exitCode === null && browserProcess.signalCode === null) {
-      browserProcess.kill('SIGTERM');
-      await Promise.race([
-        new Promise((resolve) => browserProcess.once('exit', resolve)),
-        delay(2000),
-      ]);
-      if (browserProcess.exitCode === null && browserProcess.signalCode === null) browserProcess.kill('SIGKILL');
-    }
+    await stopBrowserProcess(browserProcess);
     await runtime.stop('browser-smoke').catch(() => {});
-    await fsp.rm(root, { recursive: true, force: true });
-    await fsp.rm(backupRoot, { recursive: true, force: true });
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+    await fsp.rm(backupRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   }
 }
 
