@@ -58,52 +58,53 @@ async function stopBrowserProcess(child) {
   await delay(200);
 }
 
-function launchBrowser(browser, profileDir) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(browser, [
-      '--headless=new',
-      '--no-sandbox',
-      '--disable-gpu',
-      '--disable-dev-shm-usage',
-      '--disable-background-networking',
-      '--disable-component-update',
-      '--disable-default-apps',
-      '--disable-extensions',
-      '--disable-features=OptimizationGuideModelDownloading,MediaRouter',
-      '--disable-sync',
-      '--no-first-run',
-      '--remote-debugging-port=0',
-      '--remote-allow-origins=*',
-      `--user-data-dir=${profileDir}`,
-      'about:blank',
-    ], { stdio: ['ignore', 'ignore', 'pipe'] });
+async function launchBrowser(browser, profileDir, debugPort) {
+  const child = spawn(browser, [
+    '--headless=new',
+    '--no-sandbox',
+    '--disable-gpu',
+    '--disable-dev-shm-usage',
+    '--disable-background-networking',
+    '--disable-component-update',
+    '--disable-default-apps',
+    '--disable-extensions',
+    '--disable-features=OptimizationGuideModelDownloading,MediaRouter',
+    '--disable-sync',
+    '--no-first-run',
+    '--remote-debugging-address=127.0.0.1',
+    `--remote-debugging-port=${debugPort}`,
+    '--remote-allow-origins=*',
+    `--user-data-dir=${profileDir}`,
+    'about:blank',
+  ], { stdio: ['ignore', 'ignore', 'pipe'] });
 
-    let stderr = '';
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.kill('SIGKILL');
-      reject(new Error(`Chrome DevTools endpoint did not start. stderr=${stderr.slice(-4000)}`));
-    }, 15_000);
-
-    child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk;
-      if (stderr.length > 32_000) stderr = stderr.slice(-32_000);
-      const match = stderr.match(/DevTools listening on (ws:\/\/[^\s]+)/);
-      if (!match || settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ child, websocketUrl: match[1], stderr: () => stderr });
-    });
-    child.once('exit', (code, signal) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(new Error(`Chrome exited before DevTools became ready (code=${code}, signal=${signal}). stderr=${stderr.slice(-4000)}`));
-    });
+  let stderr = '';
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk;
+    if (stderr.length > 32_000) stderr = stderr.slice(-32_000);
   });
+
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(`Chrome exited before DevTools became ready (code=${child.exitCode}, signal=${child.signalCode}). stderr=${stderr.slice(-4000)}`);
+    }
+    try {
+      const response = await fetch(`http://127.0.0.1:${debugPort}/json/version`, {
+        signal: AbortSignal.timeout(500),
+      });
+      if (response.ok) {
+        const version = await response.json();
+        if (version?.webSocketDebuggerUrl) {
+          return { child, websocketUrl: version.webSocketDebuggerUrl, stderr: () => stderr };
+        }
+      }
+    } catch {}
+    await delay(100);
+  }
+
+  child.kill('SIGKILL');
+  throw new Error(`Chrome DevTools endpoint did not become reachable on 127.0.0.1:${debugPort}. stderr=${stderr.slice(-4000)}`);
 }
 
 class DevToolsClient {
@@ -250,6 +251,7 @@ async function main() {
   const backupRoot = path.join(os.tmpdir(), `chatroom-browser-backups-${process.pid}-${Date.now()}`);
   const profileDir = path.join(root, 'chrome-profile');
   const port = await freePort();
+  const debugPort = await freePort();
   await fsp.mkdir(dataDir, { recursive: true });
   await fsp.writeFile(path.join(dataDir, 'config.json'), JSON.stringify({
     adminUser: 'admin',
@@ -281,7 +283,7 @@ async function main() {
     assert.ok(!csp.includes("'unsafe-eval'"), 'CSP must not permit unsafe-eval.');
 
     const executable = findBrowser();
-    const browser = await launchBrowser(executable, profileDir);
+    const browser = await launchBrowser(executable, profileDir, debugPort);
     browserProcess = browser.child;
     const inspected = await inspectPage(browser, url);
     console.log(`PASS headless browser rendered Vue UI under CSP using ${executable} (${inspected.domLength} DOM bytes)`);
