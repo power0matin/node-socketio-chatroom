@@ -85,8 +85,9 @@ jobs:
           done
           if [[ "$ready" != "1" ]]; then cat /tmp/chatroom-ci.log; exit 1; fi
           curl --fail --silent http://127.0.0.1:31888/healthz
-          node_pid="$(pgrep -u chatroomci -f '/tmp/node-socketio-chatroom-ci/src/server.js' | head -n 1)"
-          test -n "$node_pid"
+          mapfile -t node_pids < <(pgrep -u chatroomci -f '/tmp/node-socketio-chatroom-ci/src/server.js')
+          (( ${#node_pids[@]} >= 1 ))
+          node_pid="${node_pids[0]}"
           sudo kill -TERM "$node_pid"
           stopped=0
           for _ in {1..15}; do
@@ -104,8 +105,9 @@ jobs:
             CHATROOM_SKIP_SERVICE=1 \
             /tmp/node-socketio-chatroom-ci/scripts/uninstall.sh
           test ! -e /tmp/node-socketio-chatroom-ci
-          archive="$(find /tmp/node-socketio-chatroom-backups-ci -maxdepth 1 -name 'chatroom-backup-*.tar.gz' | head -n 1)"
-          test -n "$archive"
+          mapfile -t archives < <(find /tmp/node-socketio-chatroom-backups-ci -maxdepth 1 -name 'chatroom-backup-*.tar.gz' -print)
+          (( ${#archives[@]} >= 1 ))
+          archive="${archives[0]}"
           sudo sha256sum --check "$archive.sha256"
 
   shell:
