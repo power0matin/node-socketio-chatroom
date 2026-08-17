@@ -19,16 +19,17 @@ while (($#)); do
     *) fail "Unknown argument: $1" ;;
   esac
 done
-[[ -n "$SOURCE_DIR" || -n "$REF" ]] || fail "Usage: scripts/update.sh --source /path/to/release OR --ref vX.Y.Z|commit"
-[[ ! ( -n "$SOURCE_DIR" && -n "$REF" ) ]] || fail "Choose only one update source."
+if [[ -z "$SOURCE_DIR" && -z "$REF" ]]; then fail "Usage: scripts/update.sh --source /path/to/release OR --ref vX.Y.Z|commit"; fi
+if [[ -n "$SOURCE_DIR" && -n "$REF" ]]; then fail "Choose only one update source."; fi
 [[ -f "$ROOT_DIR/.chatroom-install" && "$(cat "$ROOT_DIR/.chatroom-install")" == "$PROJECT_ID" ]] || fail "Valid installation sentinel not found in $ROOT_DIR."
 [[ "$BACKUP_ROOT" != "$ROOT_DIR" && "$BACKUP_ROOT" != "$ROOT_DIR"/* ]] || fail "BACKUP_ROOT must be outside the application directory."
 command -v rsync >/dev/null 2>&1 || fail "rsync is required."
 command -v npm >/dev/null 2>&1 || fail "npm is required."
 command -v node >/dev/null 2>&1 || fail "node is required."
+command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required."
 
 NODE_MAJOR="$(node -p 'Number(process.versions.node.split(".")[0])')"
-(( NODE_MAJOR >= 20 )) || fail "Node.js >=20 is required."
+if (( NODE_MAJOR < 20 )); then fail "Node.js >=20 is required."; fi
 
 mkdir -p -- "$BACKUP_ROOT"
 LOCK_DIR="$BACKUP_ROOT/.update.lock"
@@ -38,7 +39,7 @@ acquire_lock() {
     return 0
   fi
   local old_pid=""
-  [[ -f "$LOCK_DIR/pid" ]] && old_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || printf '')"
+  if [[ -f "$LOCK_DIR/pid" ]]; then old_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null)"; fi
   if [[ "$old_pid" =~ ^[0-9]+$ ]] && kill -0 "$old_pid" 2>/dev/null; then
     fail "Another update is active with PID $old_pid."
   fi
@@ -53,13 +54,15 @@ DOWNLOAD_TMP=""
 ROLLBACK_DIR=""
 cleanup() {
   local rc=$?
-  [[ -n "$STAGE" && -d "$STAGE" ]] && rm -rf -- "$STAGE"
-  [[ -n "$DOWNLOAD_TMP" && -f "$DOWNLOAD_TMP" ]] && rm -f -- "$DOWNLOAD_TMP"
+  if [[ -n "${STAGE:-}" && -d "$STAGE" ]]; then rm -rf -- "$STAGE"; fi
+  if [[ -n "${DOWNLOAD_TMP:-}" && -f "$DOWNLOAD_TMP" ]]; then rm -f -- "$DOWNLOAD_TMP"; fi
   rm -rf -- "$LOCK_DIR"
   return "$rc"
 }
 acquire_lock
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 PARENT="$(dirname -- "$ROOT_DIR")"
 STAGE="$(mktemp -d "${PARENT}/.${PROJECT_ID}.update.XXXXXX")"
@@ -68,18 +71,14 @@ if [[ -n "$SOURCE_DIR" ]]; then
   SOURCE_DIR="$(realpath -- "$SOURCE_DIR")"
   [[ "$SOURCE_DIR" != "$ROOT_DIR" ]] || fail "Update source cannot be the live installation."
   [[ -f "$SOURCE_DIR/package.json" && -f "$SOURCE_DIR/package-lock.json" ]] || fail "Update source is not a complete release tree."
-  rsync -a --delete \
-    --exclude='.git/' --exclude='node_modules/' --exclude='data/' --exclude='public/uploads/' \
-    "$SOURCE_DIR/" "$STAGE/"
+  rsync -a --delete --exclude='.git/' --exclude='node_modules/' --exclude='data/' --exclude='public/uploads/' "$SOURCE_DIR/" "$STAGE/"
 else
   [[ "$REF" =~ ^[A-Za-z0-9._-]{7,80}$ ]] || fail "REF must be an immutable tag or commit without slashes."
   case "$REF" in main|master|latest|HEAD) fail "Floating refs are not allowed. Use a release tag or full commit SHA." ;; esac
   command -v curl >/dev/null 2>&1 || fail "curl is required for --ref updates."
   DOWNLOAD_TMP="$(mktemp "$BACKUP_ROOT/.release.XXXXXX.tar.gz")"
-  curl --fail --location --silent --show-error \
-    "https://github.com/power0matin/node-socketio-chatroom/archive/${REF}.tar.gz" \
-    --output "$DOWNLOAD_TMP"
-  tar -tzf "$DOWNLOAD_TMP" >/dev/null || fail "Downloaded release archive is invalid."
+  curl --fail --location --silent --show-error "https://github.com/power0matin/node-socketio-chatroom/archive/${REF}.tar.gz" --output "$DOWNLOAD_TMP"
+  if ! tar -tzf "$DOWNLOAD_TMP" >/dev/null; then fail "Downloaded release archive is invalid."; fi
   tar -xzf "$DOWNLOAD_TMP" -C "$STAGE" --strip-components=1
 fi
 
@@ -103,7 +102,6 @@ info "Validating staged configuration, encryption key and persistence migration"
 (
   cd "$STAGE"
   BACKUP_ROOT="$BACKUP_ROOT" node - <<'NODE'
-const path = require('path');
 const { createApplication } = require('./src/server');
 (async () => {
   const runtime = await createApplication({ rootDir: process.cwd(), backupRoot: process.env.BACKUP_ROOT, env: process.env });
@@ -115,17 +113,44 @@ NODE
 
 OWNER="$(stat -c '%U' "$ROOT_DIR")"
 GROUP="$(stat -c '%G' "$ROOT_DIR")"
-chown -R "$OWNER:$GROUP" "$STAGE"
+if (( EUID == 0 )); then
+  chown -R "$OWNER:$GROUP" "$STAGE"
+else
+  [[ "$(id -un)" == "$OWNER" ]] || fail "Non-root updater cannot preserve ownership for $OWNER. Re-run as root."
+fi
 ROLLBACK_DIR="${PARENT}/.${PROJECT_ID}.rollback.$(date -u +%Y%m%dT%H%M%SZ).$$"
 PORT="$(node -e 'const c=require(process.argv[1]); const p=Number(c.port||3000); if(!Number.isInteger(p)||p<1||p>65535) process.exit(2); process.stdout.write(String(p))' "$STAGE/data/config.json")"
+OLD_PORT="$(node -e 'const c=require(process.argv[1]); const p=Number(c.port||3000); if(!Number.isInteger(p)||p<1||p>65535) process.exit(2); process.stdout.write(String(p))' "$ROOT_DIR/data/config.json")"
+
+wait_ready() {
+  local port="$1" ready=0
+  for _ in {1..30}; do
+    if curl --fail --silent "http://127.0.0.1:${port}/readyz" >/dev/null; then ready=1; break; fi
+    sleep 1
+  done
+  [[ "$ready" == "1" ]]
+}
 
 rollback_swap() {
   info "Rolling back to previous application tree"
   if [[ -d "$ROOT_DIR" ]]; then rm -rf -- "$ROOT_DIR"; fi
   mv -- "$ROLLBACK_DIR" "$ROOT_DIR"
+  ROLLBACK_DIR=""
   if [[ "$SKIP_SERVICE" != "1" ]]; then
     systemctl daemon-reload
     systemctl start "$SERVICE_NAME"
+    wait_ready "$OLD_PORT" || return 1
+  else
+    (
+      cd "$ROOT_DIR"
+      BACKUP_ROOT="$BACKUP_ROOT" node - <<'NODE'
+const { createApplication } = require('./src/server');
+(async () => {
+  const runtime = await createApplication({ rootDir: process.cwd(), backupRoot: process.env.BACKUP_ROOT, env: process.env });
+  await runtime.store.flush();
+})().catch((error) => { console.error(error); process.exitCode = 1; });
+NODE
+    ) || return 1
   fi
 }
 
@@ -137,22 +162,17 @@ STAGE=""
 if [[ "$SKIP_SERVICE" != "1" ]]; then
   systemctl daemon-reload
   if ! systemctl start "$SERVICE_NAME"; then
-    rollback_swap
-    fail "New release failed to start; previous release restored."
+    if ! rollback_swap; then fail "New release failed to start and rollback verification also failed."; fi
+    fail "New release failed to start; previous release was restored and verified."
   fi
-  ready=0
-  for _ in {1..30}; do
-    if curl --fail --silent "http://127.0.0.1:${PORT}/readyz" >/dev/null; then ready=1; break; fi
-    sleep 1
-  done
-  if [[ "$ready" != "1" ]]; then
+  if ! wait_ready "$PORT"; then
     systemctl stop "$SERVICE_NAME"
-    rollback_swap
-    fail "New release failed readiness; previous release restored."
+    if ! rollback_swap; then fail "New release failed readiness and rollback verification also failed."; fi
+    fail "New release failed readiness; previous release was restored and verified."
   fi
 else
   info "SKIP_SERVICE=1: validating swapped tree without service manager"
-  (
+  if ! (
     cd "$ROOT_DIR"
     BACKUP_ROOT="$BACKUP_ROOT" node - <<'NODE'
 const { createApplication } = require('./src/server');
@@ -161,20 +181,19 @@ const { createApplication } = require('./src/server');
   await runtime.store.flush();
 })().catch((error) => { console.error(error); process.exitCode = 1; });
 NODE
-  ) || {
-    rollback_swap
-    fail "Post-swap validation failed; previous release restored."
-  }
+  ); then
+    if ! rollback_swap; then fail "Post-swap validation failed and rollback verification also failed."; fi
+    fail "Post-swap validation failed; previous release was restored and verified."
+  fi
 fi
 
-# Keep an immutable code snapshot for manual rollback while data remains in the verified backup.
 CODE_ARCHIVE="$BACKUP_ROOT/code-before-$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
 (
   cd "$ROLLBACK_DIR"
   tar -czf "$CODE_ARCHIVE" --exclude='./data' --exclude='./public/uploads' --exclude='./node_modules' .
 )
 sha256sum "$CODE_ARCHIVE" > "$CODE_ARCHIVE.sha256"
-sha256sum --check "$CODE_ARCHIVE.sha256" >/dev/null
+if ! sha256sum --check "$CODE_ARCHIVE.sha256" >/dev/null; then fail "Previous code snapshot verification failed."; fi
 rm -rf -- "$ROLLBACK_DIR"
 ROLLBACK_DIR=""
 
