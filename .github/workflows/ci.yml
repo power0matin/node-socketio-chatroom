@@ -119,7 +119,7 @@ jobs:
             CHATROOM_SKIP_SERVICE=1 \
             /tmp/node-socketio-chatroom-ci/scripts/uninstall.sh
           test ! -e /tmp/node-socketio-chatroom-ci
-          mapfile -t archives < <(find /tmp/node-socketio-chatroom-backups-ci -maxdepth 1 -name 'chatroom-backup-*.tar.gz' -print)
+          mapfile -t archives < <(sudo find /tmp/node-socketio-chatroom-backups-ci -maxdepth 1 -name 'chatroom-backup-*.tar.gz' -print)
           (( ${#archives[@]} >= 1 ))
           archive="${archives[0]}"
           sudo sha256sum --check "$archive.sha256"
