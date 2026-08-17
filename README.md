@@ -1,5 +1,15 @@
 # Node Socket.IO Chatroom
 
+<!-- repo-badges:start -->
+<p align="center">
+  <a href="https://hits.sh/github.com/power0matin/node-socketio-chatroom/"><img src="https://hits.sh/github.com/power0matin/node-socketio-chatroom.svg?style=flat-square&amp;label=Views&amp;labelColor=18181B&amp;color=0EA5E9&amp;logo=github" alt="Repository Views"/></a>
+  <a href="https://github.com/power0matin/node-socketio-chatroom/stargazers"><img src="https://img.shields.io/github/stars/power0matin/node-socketio-chatroom?style=flat-square&amp;label=Stars&amp;labelColor=18181B&amp;color=F59E0B&amp;logo=github&amp;logoColor=white" alt="GitHub Stars"/></a>
+  <a href="https://github.com/power0matin/node-socketio-chatroom/forks"><img src="https://img.shields.io/github/forks/power0matin/node-socketio-chatroom?style=flat-square&amp;label=Forks&amp;labelColor=18181B&amp;color=6366F1&amp;logo=github&amp;logoColor=white" alt="GitHub Forks"/></a>
+  <a href="https://github.com/power0matin/node-socketio-chatroom/issues"><img src="https://img.shields.io/github/issues/power0matin/node-socketio-chatroom?style=flat-square&amp;label=Issues&amp;labelColor=18181B&amp;color=22C55E&amp;logo=github&amp;logoColor=white" alt="GitHub Issues"/></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/power0matin/node-socketio-chatroom?style=flat-square&amp;label=License&amp;labelColor=18181B&amp;color=EF4444&amp;logo=github&amp;logoColor=white" alt="GitHub License"/></a>
+</p>
+<!-- repo-badges:end -->
+
 A hardened single-host real-time chat application built with Node.js, Express, Socket.IO and a self-hosted Vue/Tailwind frontend.
 
 Version `1.11.0` is the production-hardening release candidate. The repository includes encrypted persistence, session restoration, multi-session authorization, protected uploads, verified backup/restore, transactional updates, a systemd service, health/readiness endpoints and automated CI.
