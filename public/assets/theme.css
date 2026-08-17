@@ -1,7 +1,7 @@
 :root {
-  --brand-color: __COLOR_DEFAULT__;
-  --brand-dark: __COLOR_DARK__;
-  --brand-light: __COLOR_LIGHT__;
+  --brand-color: #2563eb;
+  --brand-dark: #1d4ed8;
+  --brand-light: #dbeafe;
 
   --bg-app: #F7F8FC;
   --bg-chat: #F2F4F8;
