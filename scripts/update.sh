@@ -82,11 +82,19 @@ else
   tar -xzf "$DOWNLOAD_TMP" -C "$STAGE" --strip-components=1
 fi
 
-[[ -f "$STAGE/src/server.js" && -f "$STAGE/scripts/update.sh" && -f "$STAGE/public/vendor/vue.global.prod.js" ]] || fail "Release tree is incomplete or frontend assets were not built."
-info "Installing exact production dependency graph in staging"
+[[ -f "$STAGE/src/server.js" && -f "$STAGE/scripts/update.sh" && -f "$STAGE/scripts/build-assets.js" && -f "$STAGE/public/index.html" && -f "$STAGE/public/assets/app.js" && -f "$STAGE/src/styles.css" && -f "$STAGE/tailwind.config.js" ]] || fail "Release tree is incomplete."
+info "Installing exact dependency graph, rebuilding frontend assets and validating staging"
 (
   cd "$STAGE"
-  npm ci --omit=dev --ignore-scripts
+  npm ci --ignore-scripts
+  npm run build
+  npm run check
+  [[ -s public/assets/render.js && -s public/assets/tailwind.css && -s public/vendor/vue.global.prod.js ]] || exit 1
+  if grep -Eq 'new[[:space:]]+Function|unsafe-eval' public/assets/render.js; then
+    printf 'Generated Vue render asset contains forbidden dynamic evaluation.\n' >&2
+    exit 1
+  fi
+  npm prune --omit=dev --ignore-scripts
   npm audit --omit=dev --audit-level=high
 )
 
