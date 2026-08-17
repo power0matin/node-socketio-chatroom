@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main, agent/production-hardening]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Node ${{ matrix.node }} quality gate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: Install exact dependency graph
+        run: npm ci
+      - name: Verify generated frontend is reproducible
+        run: |
+          npm run build
+          git diff --exit-code -- package-lock.json public/index.html public/assets/tailwind.css public/vendor
+      - name: Syntax checks
+        run: npm run check
+      - name: Unit integration upgrade and security tests
+        run: npm test
+      - name: Runtime smoke test
+        run: npm run smoke
+      - name: Dependency security audit
+        run: npm audit --audit-level=high
+
+  shell:
+    name: Shell safety
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+      - name: Parse shell scripts
+        run: bash -n install.sh menu.sh scripts/update.sh scripts/backup.sh scripts/restore.sh scripts/uninstall.sh
+      - name: ShellCheck
+        run: shellcheck install.sh menu.sh scripts/update.sh scripts/backup.sh scripts/restore.sh scripts/uninstall.sh
