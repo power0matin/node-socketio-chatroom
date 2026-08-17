@@ -28,13 +28,7 @@ function encryptPayload(key, value) {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
   const ciphertext = Buffer.concat([cipher.update(Buffer.from(JSON.stringify(value), 'utf8')), cipher.final()]);
-  return {
-    v: 1,
-    alg: 'A256GCM',
-    iv: iv.toString('base64'),
-    tag: cipher.getAuthTag().toString('base64'),
-    data: ciphertext.toString('base64'),
-  };
+  return { v: 1, alg: 'A256GCM', iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), data: ciphertext.toString('base64') };
 }
 
 function decryptPayload(key, wrapper) {
@@ -54,18 +48,14 @@ function decryptPayload(key, wrapper) {
 
 async function readJsonStrict(file, { missing = undefined } = {}) {
   let raw;
-  try {
-    raw = await fsp.readFile(file, 'utf8');
-  } catch (error) {
+  try { raw = await fsp.readFile(file, 'utf8'); }
+  catch (error) {
     if (error && error.code === 'ENOENT') return missing;
     throw new PersistenceError(`Unable to read ${file}: ${error.message}`, 'READ_FAILED', error);
   }
   if (!raw.trim()) throw new PersistenceError(`Persistence file is empty: ${file}`, 'CORRUPT_FILE');
-  try {
-    return JSON.parse(raw);
-  } catch (error) {
-    throw new PersistenceError(`Persistence file is invalid JSON: ${file}`, 'CORRUPT_FILE', error);
-  }
+  try { return JSON.parse(raw); }
+  catch (error) { throw new PersistenceError(`Persistence file is invalid JSON: ${file}`, 'CORRUPT_FILE', error); }
 }
 
 async function fsyncDirectory(dir) {
@@ -77,19 +67,20 @@ async function atomicWriteJson(file, value, mode = 0o600) {
   const dir = path.dirname(file);
   await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
-  const handle = await fsp.open(tmp, 'wx', mode);
+  let handle;
   try {
+    handle = await fsp.open(tmp, 'wx', mode);
     await handle.writeFile(JSON.stringify(value, null, 2), 'utf8');
     await handle.sync();
-  } finally {
     await handle.close();
-  }
-  try {
+    handle = null;
     await fsp.rename(tmp, file);
     await fsp.chmod(file, mode);
     await fsyncDirectory(dir);
   } catch (error) {
+    if (handle) await handle.close().catch(() => {});
     await fsp.rm(tmp, { force: true }).catch(() => {});
+    if (error instanceof PersistenceError) throw error;
     throw new PersistenceError(`Atomic write failed for ${file}: ${error.message}`, 'WRITE_FAILED', error);
   }
 }
@@ -102,9 +93,7 @@ async function readEncrypted(file, key, { missing = undefined, allowPlaintext = 
   throw new PersistenceError(`Expected encrypted persistence but found plaintext: ${file}`, 'PLAINTEXT_UNEXPECTED');
 }
 
-async function writeEncrypted(file, key, value) {
-  await atomicWriteJson(file, encryptPayload(key, value), 0o600);
-}
+async function writeEncrypted(file, key, value) { await atomicWriteJson(file, encryptPayload(key, value), 0o600); }
 
 async function copyVerified(src, dst) {
   await fsp.mkdir(path.dirname(dst), { recursive: true, mode: 0o700 });
@@ -126,15 +115,12 @@ async function createVerifiedBackup(files, backupRoot, label = 'migration') {
   await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
   const manifest = { version: 1, createdAt: new Date().toISOString(), label, files: {} };
   for (const file of files) {
-    try {
-      await fsp.access(file, fs.constants.R_OK);
-    } catch (error) {
-      if (error.code === 'ENOENT') continue;
-      throw error;
-    }
+    try { await fsp.access(file, fs.constants.R_OK); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
     const name = path.basename(file);
     manifest.files[name] = await copyVerified(file, path.join(dir, name));
   }
+  if (!Object.keys(manifest.files).length) throw new PersistenceError('Refusing to report success for an empty backup.', 'EMPTY_BACKUP');
   await atomicWriteJson(path.join(dir, 'manifest.json'), manifest, 0o600);
   return { dir, manifest };
 }
@@ -150,33 +136,38 @@ async function resolveDataKey({ dataDir, config, env = process.env }) {
     const key = keyFromHex(raw);
     if (!key) throw new PersistenceError(`${keyFile} contains an invalid key.`, 'INVALID_KEY');
     return { key, source: 'file', hex: raw, migratedLegacy: false };
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-  }
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
 
   const legacy = config && config.dataEncKey ? String(config.dataEncKey).trim() : '';
   const legacyKey = legacy ? keyFromHex(legacy) : null;
   if (legacy && !legacyKey) throw new PersistenceError('Legacy config.dataEncKey is invalid; refusing to generate a replacement key.', 'INVALID_LEGACY_KEY');
   if (legacyKey) {
     await fsp.writeFile(keyFile, legacy, { mode: 0o600, flag: 'wx' });
+    const reread = (await fsp.readFile(keyFile, 'utf8')).trim();
+    if (reread !== legacy) throw new PersistenceError('Legacy key migration verification failed.', 'KEY_MIGRATION_FAILED');
     return { key: legacyKey, source: 'legacy-config', hex: legacy, migratedLegacy: true };
   }
 
   const hex = crypto.randomBytes(32).toString('hex');
   await fsp.writeFile(keyFile, hex, { mode: 0o600, flag: 'wx' });
+  const reread = (await fsp.readFile(keyFile, 'utf8')).trim();
+  if (reread !== hex) throw new PersistenceError('Generated key verification failed.', 'KEY_MIGRATION_FAILED');
   return { key: Buffer.from(hex, 'hex'), source: 'generated', hex, migratedLegacy: false };
 }
 
 function defaultState() {
-  return {
-    schemaVersion: 2,
-    users: {},
-    channels: ['General', 'Random'],
-    messages: {},
-    conversations: {},
-    memberships: {},
-    attachments: {},
-  };
+  return { schemaVersion: 2, users: {}, channels: ['General', 'Random'], messages: {}, conversations: {}, memberships: {}, attachments: {}, sessions: {} };
+}
+
+function normalizeState(state) {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) throw new PersistenceError('state.json must contain an object.', 'CORRUPT_STATE');
+  const base = defaultState();
+  const normalized = { ...base, ...state };
+  for (const key of ['users', 'messages', 'conversations', 'memberships', 'attachments', 'sessions']) {
+    if (!normalized[key] || typeof normalized[key] !== 'object' || Array.isArray(normalized[key])) throw new PersistenceError(`state.${key} must be an object.`, 'CORRUPT_STATE');
+  }
+  if (!Array.isArray(normalized.channels)) throw new PersistenceError('state.channels must be an array.', 'CORRUPT_STATE');
+  return normalized;
 }
 
 async function loadState({ dataDir, key, backupRoot }) {
@@ -184,18 +175,18 @@ async function loadState({ dataDir, key, backupRoot }) {
   const current = await readEncrypted(stateFile, key, { missing: null, allowPlaintext: false });
   if (current) {
     if (current.schemaVersion !== 2) throw new PersistenceError(`Unsupported state schema ${current.schemaVersion}`, 'UNSUPPORTED_SCHEMA');
-    return { state: current, migrated: false, backup: null };
+    return { state: normalizeState(current), migrated: false, backup: null };
   }
 
   const legacyNames = ['users.json', 'channels.json', 'messages.json', 'conversations.json', 'memberships.json', 'attachments.json'];
   const legacyPaths = legacyNames.map((name) => path.join(dataDir, name));
   const existing = [];
   for (const file of legacyPaths) {
-    try { await fsp.access(file); existing.push(file); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    try { await fsp.access(file); existing.push(file); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
   if (!existing.length) return { state: defaultState(), migrated: false, backup: null };
 
-  // Validate every existing legacy file before any migration write.
   const loaded = {};
   for (const file of existing) {
     const name = path.basename(file, '.json');
@@ -210,8 +201,8 @@ async function loadState({ dataDir, key, backupRoot }) {
   if (loaded.conversations && typeof loaded.conversations === 'object') state.conversations = loaded.conversations;
   if (loaded.memberships && typeof loaded.memberships === 'object') state.memberships = loaded.memberships;
   if (loaded.attachments && typeof loaded.attachments === 'object') state.attachments = loaded.attachments;
-  await writeEncrypted(stateFile, key, state);
-  return { state, migrated: true, backup };
+  await writeEncrypted(stateFile, key, normalizeState(state));
+  return { state: normalizeState(state), migrated: true, backup };
 }
 
 class StateStore {
@@ -222,35 +213,26 @@ class StateStore {
     this.dirty = false;
     this.timer = null;
     this.chain = Promise.resolve();
+    this.lastError = null;
   }
 
   markDirty() {
     this.dirty = true;
-    if (!this.timer) this.timer = setTimeout(() => { this.timer = null; void this.flush(); }, 250);
+    if (!this.timer) this.timer = setTimeout(() => { this.timer = null; this.flush().catch(() => {}); }, 250);
   }
 
   async flush() {
-    if (!this.dirty) return;
+    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+    if (!this.dirty) { await this.chain; if (this.lastError) throw this.lastError; return; }
     this.dirty = false;
     const snapshot = structuredClone(this.state);
-    this.chain = this.chain.then(() => writeEncrypted(this.file, this.key, snapshot));
-    try { await this.chain; } catch (error) { this.dirty = true; throw error; }
+    const operation = async () => writeEncrypted(this.file, this.key, snapshot);
+    this.chain = this.chain.catch(() => {}).then(operation);
+    try { await this.chain; this.lastError = null; }
+    catch (error) { this.dirty = true; this.lastError = error; throw error; }
   }
+
+  isReady() { return !this.lastError; }
 }
 
-module.exports = {
-  PersistenceError,
-  StateStore,
-  atomicWriteJson,
-  createVerifiedBackup,
-  decryptPayload,
-  defaultState,
-  encryptPayload,
-  encryptedWrapper,
-  keyFromHex,
-  loadState,
-  readEncrypted,
-  readJsonStrict,
-  resolveDataKey,
-  writeEncrypted,
-};
+module.exports = { PersistenceError, StateStore, atomicWriteJson, createVerifiedBackup, decryptPayload, defaultState, encryptPayload, encryptedWrapper, keyFromHex, loadState, normalizeState, readEncrypted, readJsonStrict, resolveDataKey, writeEncrypted };
