@@ -148,10 +148,13 @@ jobs:
           sudo sha256sum --check "$archive.sha256"
 
   shell:
-    name: Shell safety
+    name: Shell + systemd safety
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - name: Install ShellCheck
         run: |
           sudo apt-get update
@@ -160,3 +163,17 @@ jobs:
         run: bash -n install.sh menu.sh scripts/update.sh scripts/backup.sh scripts/restore.sh scripts/uninstall.sh
       - name: ShellCheck
         run: shellcheck install.sh menu.sh scripts/update.sh scripts/backup.sh scripts/restore.sh scripts/uninstall.sh
+      - name: Verify rendered systemd unit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p data public/uploads /tmp/node-socketio-chatroom-unit-backups
+          rendered=/tmp/node-socketio-chatroom.service
+          sed \
+            -e "s|@@USER@@|$(id -un)|g" \
+            -e "s|@@GROUP@@|$(id -gn)|g" \
+            -e "s|@@DIR@@|$PWD|g" \
+            -e "s|@@NODE@@|$(command -v node)|g" \
+            -e "s|@@BACKUP_ROOT@@|/tmp/node-socketio-chatroom-unit-backups|g" \
+            deploy/node-socketio-chatroom.service > "$rendered"
+          systemd-analyze verify "$rendered"
