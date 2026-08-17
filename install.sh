@@ -17,7 +17,7 @@ info() { printf '==> %s\n' "$*"; }
 
 [[ -n "${BASH_VERSION:-}" ]] || fail "This installer requires bash."
 [[ "${EUID}" -eq 0 ]] || fail "Run this installer as root (sudo ./install.sh)."
-[[ -f "$SCRIPT_DIR/package.json" && -f "$SCRIPT_DIR/package-lock.json" && -f "$SCRIPT_DIR/src/server.js" ]] || fail "Run install.sh from a complete repository checkout/release, not as a standalone downloaded script."
+[[ -f "$SCRIPT_DIR/package.json" && -f "$SCRIPT_DIR/package-lock.json" && -f "$SCRIPT_DIR/src/server.js" && -f "$SCRIPT_DIR/scripts/build-assets.js" ]] || fail "Run install.sh from a complete repository checkout/release, not as a standalone downloaded script."
 
 command -v node >/dev/null 2>&1 || fail "Node.js >=20 is required. Install Node.js first."
 command -v npm >/dev/null 2>&1 || fail "npm >=10 is required."
@@ -90,12 +90,18 @@ rsync -a --delete \
   --exclude='.menu-update.lock' \
   "$SCRIPT_DIR/" "$STAGE_DIR/"
 
-[[ -f "$STAGE_DIR/public/assets/tailwind.css" && -f "$STAGE_DIR/public/vendor/vue.global.prod.js" ]] || fail "Generated frontend assets are missing. Run npm ci && npm run build before creating a release."
-
-info "Installing exact production dependencies from package-lock.json"
+info "Installing the exact dependency graph and building reproducible frontend assets"
 (
   cd "$STAGE_DIR"
-  npm ci --omit=dev --ignore-scripts
+  npm ci --ignore-scripts
+  npm run build
+  npm run check
+  [[ -s public/assets/render.js && -s public/assets/tailwind.css && -s public/vendor/vue.global.prod.js ]] || exit 1
+  if grep -Eq 'new[[:space:]]+Function|unsafe-eval' public/assets/render.js; then
+    printf 'Generated Vue render asset contains forbidden dynamic evaluation.\n' >&2
+    exit 1
+  fi
+  npm prune --omit=dev --ignore-scripts
   npm audit --omit=dev --audit-level=high
 )
 
