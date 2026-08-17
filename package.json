@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/server.js",
     "build": "node scripts/build-assets.js",
-    "check": "node --check src/server.js && node --check src/lib/config.js && node --check src/lib/logger.js && node --check src/lib/security.js && node --check src/lib/storage.js && node --check src/lib/uploads.js && node --check public/assets/app.js && node --check scripts/build-assets.js",
+    "check": "node --check src/server.js && node --check src/lib/config.js && node --check src/lib/logger.js && node --check src/lib/security.js && node --check src/lib/storage.js && node --check src/lib/uploads.js && node --check public/assets/app.js && node --check scripts/build-assets.js && node --check scripts/smoke-test.js",
     "test": "node --test --test-concurrency=1 tests/*.test.js",
     "test:unit": "node --test --test-concurrency=1 tests/storage.test.js tests/config.test.js tests/security.test.js",
     "test:integration": "node --test --test-concurrency=1 tests/runtime.test.js tests/upgrade.test.js",
@@ -29,6 +29,7 @@
   },
   "devDependencies": {
     "@fortawesome/fontawesome-free": "^6.7.2",
+    "socket.io-client": "^4.8.3",
     "tailwindcss": "^3.4.17",
     "vue": "^3.5.13"
   }
