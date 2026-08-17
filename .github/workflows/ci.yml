@@ -76,8 +76,8 @@ jobs:
       - name: Start installed runtime and verify graceful shutdown
         run: |
           rm -f /tmp/chatroom-ci.log
-          node_pid="$(sudo -u chatroomci bash -c 'nohup env BACKUP_ROOT=/tmp/node-socketio-chatroom-backups-ci node /tmp/node-socketio-chatroom-ci/src/server.js > /tmp/chatroom-ci.log 2>&1 & echo $!')"
-          test -n "$node_pid"
+          sudo -u chatroomci env BACKUP_ROOT=/tmp/node-socketio-chatroom-backups-ci \
+            node /tmp/node-socketio-chatroom-ci/src/server.js > /tmp/chatroom-ci.log 2>&1 &
           ready=0
           for _ in {1..30}; do
             if curl --fail --silent http://127.0.0.1:31888/readyz >/dev/null; then ready=1; break; fi
@@ -85,10 +85,12 @@ jobs:
           done
           if [[ "$ready" != "1" ]]; then cat /tmp/chatroom-ci.log; exit 1; fi
           curl --fail --silent http://127.0.0.1:31888/healthz
+          node_pid="$(pgrep -u chatroomci -f '/tmp/node-socketio-chatroom-ci/src/server.js' | head -n 1)"
+          test -n "$node_pid"
           sudo kill -TERM "$node_pid"
           stopped=0
           for _ in {1..15}; do
-            if ! sudo kill -0 "$node_pid" 2>/dev/null; then stopped=1; break; fi
+            if ! curl --fail --silent http://127.0.0.1:31888/healthz >/dev/null 2>&1; then stopped=1; break; fi
             sleep 1
           done
           if [[ "$stopped" != "1" ]]; then cat /tmp/chatroom-ci.log; exit 1; fi
