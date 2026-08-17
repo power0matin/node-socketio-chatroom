@@ -64,6 +64,7 @@ if [[ -e "$INSTALL_DIR" ]]; then
   if [[ -n "$(find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
     fail "INSTALL_DIR exists and is not empty; refusing to overwrite unrelated data."
   fi
+  rmdir -- "$INSTALL_DIR" || fail "INSTALL_DIR is empty but could not be removed for an atomic installation."
 fi
 
 if ! getent group "$INSTALL_GROUP" >/dev/null 2>&1; then groupadd --system "$INSTALL_GROUP"; fi
