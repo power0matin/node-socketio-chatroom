@@ -14,6 +14,7 @@ SKIP_SYSTEMD="${SKIP_SYSTEMD:-0}"
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '==> %s\n' "$*"; }
+warn() { printf 'WARNING: %s\n' "$*" >&2; }
 
 [[ -n "${BASH_VERSION:-}" ]] || fail "This installer requires bash."
 [[ "${EUID}" -eq 0 ]] || fail "Run this installer as root (sudo ./install.sh)."
@@ -75,8 +76,37 @@ fi
 PARENT_DIR="$(dirname -- "$INSTALL_DIR")"
 mkdir -p -- "$PARENT_DIR" "$BACKUP_ROOT"
 STAGE_DIR="$(mktemp -d "${PARENT_DIR}/.${PROJECT_ID}.install.XXXXXX")"
+INSTALL_MOVED=0
+SERVICE_FILE=""
 cleanup() {
+  local rc=$?
   if [[ -n "${STAGE_DIR:-}" && -d "$STAGE_DIR" ]]; then rm -rf -- "$STAGE_DIR"; fi
+
+  if (( rc != 0 && INSTALL_MOVED == 1 )); then
+    warn "Installation failed after the staged tree was moved into place; attempting rollback."
+    local service_stopped=1
+    if [[ -n "$SERVICE_FILE" && -f "$SERVICE_FILE" ]]; then
+      if command -v systemctl >/dev/null 2>&1; then
+        if ! systemctl disable --now "$SERVICE_NAME"; then
+          service_stopped=0
+          warn "Could not stop/disable $SERVICE_NAME during rollback; leaving the install tree for safe operator recovery."
+        fi
+      fi
+      rm -f -- "$SERVICE_FILE"
+      if command -v systemctl >/dev/null 2>&1; then
+        if ! systemctl daemon-reload; then warn "systemctl daemon-reload failed during rollback."; fi
+      fi
+    fi
+
+    if (( service_stopped == 1 )); then
+      if [[ -f "$INSTALL_DIR/.chatroom-install" && "$(cat "$INSTALL_DIR/.chatroom-install")" == "$PROJECT_ID" ]]; then
+        rm -rf -- "$INSTALL_DIR"
+      else
+        warn "Refusing to remove $INSTALL_DIR during rollback because the installation sentinel is missing or invalid."
+      fi
+    fi
+  fi
+  return "$rc"
 }
 trap cleanup EXIT
 
@@ -147,6 +177,7 @@ chown "$INSTALL_USER:$INSTALL_GROUP" "$BACKUP_ROOT"
 chmod 700 "$STAGE_DIR/data" "$STAGE_DIR/public/uploads" "$BACKUP_ROOT"
 mv -- "$STAGE_DIR" "$INSTALL_DIR"
 STAGE_DIR=""
+INSTALL_MOVED=1
 
 if [[ "$SKIP_SYSTEMD" == "1" ]]; then
   info "SKIP_SYSTEMD=1: source and configuration installed without service registration."
@@ -177,6 +208,7 @@ else
   if [[ "$ready" != "1" ]]; then fail "Service did not become ready. Installation is not being reported as successful."; fi
 fi
 
+INSTALL_MOVED=0
 trap - EXIT
 VERSION="$(node -p 'require(process.argv[1]).version' "$INSTALL_DIR/package.json")"
 info "Installation completed from repository version $VERSION"
