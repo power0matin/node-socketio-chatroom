@@ -26,15 +26,34 @@ jobs:
       - name: Install exact dependency graph
         run: npm ci
       - name: Verify generated frontend is reproducible
+        shell: bash
         run: |
+          set -Eeuo pipefail
+          hash_frontend() {
+            {
+              printf '%s\0' public/index.html public/assets/tailwind.css public/assets/render.js
+              find public/vendor -type f -print0
+            } | sort -z | xargs -0 sha256sum
+          }
           npm run build
-          git diff --exit-code -- package-lock.json public/index.html public/assets/tailwind.css public/vendor
+          hash_frontend > /tmp/frontend-build-1.sha256
+          npm run build
+          hash_frontend > /tmp/frontend-build-2.sha256
+          diff -u /tmp/frontend-build-1.sha256 /tmp/frontend-build-2.sha256
+          grep -q '<script defer src="/assets/render.js"></script>' public/index.html
+          grep -q '<script defer src="/assets/app.js"></script>' public/index.html
+          if grep -Eq 'new[[:space:]]+Function|unsafe-eval' public/assets/render.js; then
+            echo 'Generated render asset uses forbidden dynamic evaluation.' >&2
+            exit 1
+          fi
       - name: Syntax checks
         run: npm run check
       - name: Unit integration upgrade lifecycle and security tests
         run: npm test
       - name: Runtime smoke test
         run: npm run smoke
+      - name: Real browser CSP smoke test
+        run: npm run browser-smoke
       - name: Dependency security audit
         run: npm audit --audit-level=high
       - name: Dependency freshness report
@@ -73,6 +92,9 @@ jobs:
             ./install.sh
           test -f /tmp/node-socketio-chatroom-ci/.chatroom-install
           test "$(node -p 'require(process.argv[1]).version' /tmp/node-socketio-chatroom-ci/package.json)" = "1.11.0"
+          test -s /tmp/node-socketio-chatroom-ci/public/assets/render.js
+          test -s /tmp/node-socketio-chatroom-ci/public/vendor/vue.global.prod.js
+          grep -q '<script defer src="/assets/render.js"></script>' /tmp/node-socketio-chatroom-ci/public/index.html
       - name: Start installed runtime and verify graceful shutdown
         run: |
           rm -f /tmp/chatroom-ci.log
