@@ -26,7 +26,7 @@ const DEFAULTS = Object.freeze({
   uploadRetentionDays: 30,
   appName: 'node-socketio-chatroom',
   hideUserList: false,
-  allowedOrigins: ['http://localhost:3000'],
+  allowedOrigins: ['http://localhost:3000', 'http://127.0.0.1:3000'],
   protectUploads: true,
   accessMode: 'restricted',
   defaultChannelsForNewUsers: ['General'],
