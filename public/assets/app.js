@@ -8,7 +8,7 @@
   }
 
   const { createApp, ref, computed, nextTick, onMounted, onBeforeUnmount } = window.Vue;
-  const socket = window.io();
+  const socket = window.io({ autoConnect: false });
   const SESSION_KEY = 'chat_session_token';
   const USER_KEY = 'chat_user_name';
 
@@ -63,6 +63,7 @@
       let mediaStream = null;
       let audioChunks = [];
       let resumeInFlight = false;
+      let pendingLogin = null;
       let longPressTimer = null;
       let longPressStart = null;
       let mutationObserver = null;
@@ -180,7 +181,12 @@
         }
         error.value = '';
         isAuthBusy.value = true;
-        socket.emit('login', { username: loginForm.value.username, password: loginForm.value.password });
+        const payload = { username: loginForm.value.username, password: loginForm.value.password };
+        if (socket.connected) socket.emit('login', payload);
+        else {
+          pendingLogin = payload;
+          socket.connect();
+        }
         try {
           if ('Notification' in window && Notification.permission === 'default') void Notification.requestPermission();
         } catch {}
@@ -461,10 +467,17 @@
 
       socket.on('connect', () => {
         isConnected.value = true;
+        if (pendingLogin) {
+          const payload = pendingLogin;
+          pendingLogin = null;
+          socket.emit('login', payload);
+          return;
+        }
         if (sessionToken.value) attemptResume();
       });
       socket.on('disconnect', () => { isConnected.value = false; });
       socket.on('connect_error', (connectionError) => {
+        pendingLogin = null;
         if (!isLoggedIn.value) error.value = `خطا در اتصال: ${connectionError.message}`;
         isAuthBusy.value = false;
       });
@@ -566,7 +579,7 @@
           loginForm.value.username = localStorage.getItem(USER_KEY) || '';
           sessionToken.value = localStorage.getItem(SESSION_KEY) || '';
         } catch {}
-        if (socket.connected && sessionToken.value) attemptResume();
+        if (sessionToken.value) socket.connect();
         document.addEventListener('click', lpEnd);
         attachScrollListener();
         mutationObserver = new MutationObserver(attachScrollListener);
@@ -576,6 +589,8 @@
       onBeforeUnmount(() => {
         lpEnd();
         stopMediaTracks();
+        pendingLogin = null;
+        socket.disconnect();
         mutationObserver?.disconnect();
         document.removeEventListener('click', lpEnd);
       });
