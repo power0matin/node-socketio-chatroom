@@ -85,10 +85,7 @@ jobs:
           done
           if [[ "$ready" != "1" ]]; then cat /tmp/chatroom-ci.log; exit 1; fi
           curl --fail --silent http://127.0.0.1:31888/healthz
-          mapfile -t node_pids < <(pgrep -u chatroomci -f '/tmp/node-socketio-chatroom-ci/src/server.js')
-          (( ${#node_pids[@]} >= 1 ))
-          node_pid="${node_pids[0]}"
-          sudo kill -TERM "$node_pid"
+          sudo pkill -TERM -u chatroomci node
           stopped=0
           for _ in {1..15}; do
             if ! curl --fail --silent http://127.0.0.1:31888/healthz >/dev/null 2>&1; then stopped=1; break; fi
