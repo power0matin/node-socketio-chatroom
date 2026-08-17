@@ -41,6 +41,7 @@ async function main() {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'chatroom-browser-smoke-'));
   const dataDir = path.join(root, 'data');
   const backupRoot = path.join(os.tmpdir(), `chatroom-browser-backups-${process.pid}-${Date.now()}`);
+  const profileDir = path.join(root, 'chrome-profile');
   const port = await freePort();
   await fsp.mkdir(dataDir, { recursive: true });
   await fsp.writeFile(path.join(dataDir, 'config.json'), JSON.stringify({
@@ -77,11 +78,18 @@ async function main() {
       '--disable-gpu',
       '--disable-dev-shm-usage',
       '--disable-background-networking',
+      '--disable-component-update',
       '--disable-default-apps',
+      '--disable-extensions',
+      '--disable-features=OptimizationGuideModelDownloading,MediaRouter',
+      '--disable-sync',
       '--no-first-run',
+      `--user-data-dir=${profileDir}`,
+      '--virtual-time-budget=5000',
+      '--run-all-compositor-stages-before-draw',
       '--dump-dom',
       `http://127.0.0.1:${port}/`,
-    ], { encoding: 'utf8', timeout: 30_000, maxBuffer: 8 * 1024 * 1024 });
+    ], { encoding: 'utf8', timeout: 20_000, maxBuffer: 8 * 1024 * 1024 });
 
     assert.match(dom, /ورود\s*\/\s*ثبت نام/);
     assert.ok(!dom.includes('{{ appName }}'), 'Vue template was not rendered; raw interpolation remained in DOM.');
