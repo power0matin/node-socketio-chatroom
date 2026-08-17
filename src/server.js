@@ -132,7 +132,6 @@ async function createApplication(options = {}) {
   const state = loaded.state;
   const store = new StateStore(stateFile, keyInfo.key, state);
 
-  // Only remove the legacy key after key migration AND persistence validation succeeded.
   if (loadedConfig.legacyDataEncKey !== undefined) {
     config = await saveConfig(loadedConfig.file, config);
     logger.info('migration', 'legacy encryption key migrated to dedicated key file', { source: keyInfo.source });
@@ -213,7 +212,6 @@ async function createApplication(options = {}) {
     return state.channels.filter((channel) => canAccessChannel(username, role, channel));
   }
 
-  // Backward-compatible user migration. No plaintext credential is persisted afterward.
   for (const [username, record] of Object.entries(state.users)) {
     if (!record || typeof record !== 'object') throw new Error(`Invalid user record for ${username}`);
     if (!validUsername(username)) throw new Error(`Legacy username is incompatible with safe identifiers: ${username}`);
@@ -854,7 +852,7 @@ async function createApplication(options = {}) {
       fileSize: config.maxFileSizeMB * 1024 * 1024,
       files: 1,
       fields: 0,
-      parts: 1,
+      parts: 2,
       fieldNestingDepth: 0,
     },
     fileFilter: (_req, file, callback) => {
