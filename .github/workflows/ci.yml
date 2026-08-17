@@ -87,13 +87,16 @@ jobs:
           test -s /tmp/chatroom-ci.pid
           node_pid="$(cat /tmp/chatroom-ci.pid)"
           sudo kill -TERM "$node_pid"
-          stopped=0
+          completed=0
           for _ in {1..15}; do
-            if ! curl --fail --silent http://127.0.0.1:31888/healthz >/dev/null 2>&1; then stopped=1; break; fi
+            if grep -q 'graceful shutdown completed' /tmp/chatroom-ci.log; then completed=1; break; fi
             sleep 1
           done
-          if [[ "$stopped" != "1" ]]; then cat /tmp/chatroom-ci.log; exit 1; fi
-          grep -q 'graceful shutdown completed' /tmp/chatroom-ci.log
+          if [[ "$completed" != "1" ]]; then cat /tmp/chatroom-ci.log; exit 1; fi
+          if curl --fail --silent http://127.0.0.1:31888/healthz >/dev/null 2>&1; then
+            cat /tmp/chatroom-ci.log
+            exit 1
+          fi
           test -f /tmp/node-socketio-chatroom-ci/data/state.json
       - name: Safe uninstall retains verified backup
         run: |
