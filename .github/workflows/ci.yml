@@ -31,12 +31,65 @@ jobs:
           git diff --exit-code -- package-lock.json public/index.html public/assets/tailwind.css public/vendor
       - name: Syntax checks
         run: npm run check
-      - name: Unit integration upgrade and security tests
+      - name: Unit integration upgrade lifecycle and security tests
         run: npm test
       - name: Runtime smoke test
         run: npm run smoke
       - name: Dependency security audit
         run: npm audit --audit-level=high
+
+  clean-install:
+    name: Clean install + runtime + uninstall
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Verify release tree dependencies
+        run: npm ci
+      - name: Install exact checked-out release
+        run: |
+          sudo env \
+            INSTALL_DIR=/tmp/node-socketio-chatroom-ci \
+            BACKUP_ROOT=/tmp/node-socketio-chatroom-backups-ci \
+            INSTALL_USER=chatroomci \
+            INSTALL_GROUP=chatroomci \
+            PORT=31888 \
+            PUBLIC_ORIGIN=http://127.0.0.1:31888 \
+            ADMIN_PASSWORD='CI-Admin-Password-123!' \
+            SKIP_SYSTEMD=1 \
+            ./install.sh
+          test -f /tmp/node-socketio-chatroom-ci/.chatroom-install
+          test "$(node -p 'require(process.argv[1]).version' /tmp/node-socketio-chatroom-ci/package.json)" = "1.11.0"
+      - name: Start installed runtime and verify graceful shutdown
+        run: |
+          sudo -u chatroomci env BACKUP_ROOT=/tmp/node-socketio-chatroom-backups-ci \
+            node /tmp/node-socketio-chatroom-ci/src/server.js > /tmp/chatroom-ci.log 2>&1 &
+          pid=$!
+          ready=0
+          for _ in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:31888/readyz >/dev/null; then ready=1; break; fi
+            sleep 1
+          done
+          if [[ "$ready" != "1" ]]; then cat /tmp/chatroom-ci.log; exit 1; fi
+          curl --fail --silent http://127.0.0.1:31888/healthz
+          sudo kill -TERM "$pid"
+          wait "$pid"
+          grep -q 'graceful shutdown completed' /tmp/chatroom-ci.log
+          test -f /tmp/node-socketio-chatroom-ci/data/state.json
+      - name: Safe uninstall retains verified backup
+        run: |
+          sudo env \
+            CHATROOM_DIR=/tmp/node-socketio-chatroom-ci \
+            BACKUP_ROOT=/tmp/node-socketio-chatroom-backups-ci \
+            CHATROOM_SKIP_SERVICE=1 \
+            /tmp/node-socketio-chatroom-ci/scripts/uninstall.sh
+          test ! -e /tmp/node-socketio-chatroom-ci
+          archive="$(find /tmp/node-socketio-chatroom-backups-ci -maxdepth 1 -name 'chatroom-backup-*.tar.gz' | head -n 1)"
+          test -n "$archive"
+          sudo sha256sum --check "$archive.sha256"
 
   shell:
     name: Shell safety
