@@ -9,6 +9,12 @@ test('valid configuration normalizes explicit origins', () => {
   assert.deepEqual(config.allowedOrigins, ['https://chat.example.com']);
 });
 
+test('local defaults permit both localhost and numeric loopback origins', () => {
+  const config = validateConfig(DEFAULTS);
+  assert.deepEqual(config.allowedOrigins, ['http://localhost:3000', 'http://127.0.0.1:3000']);
+  assert.equal(config.bindHost, '127.0.0.1');
+});
+
 test('invalid ports fail fast with clear configuration errors', () => {
   for (const port of ['abc', 0, 70000, 3.14]) {
     assert.throws(() => validateConfig({ ...DEFAULTS, port }), /port must be an integer between 1 and 65535/i);
