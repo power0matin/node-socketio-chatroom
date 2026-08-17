@@ -13,15 +13,15 @@ fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 ARCHIVE="$(realpath -- "$ARCHIVE")"
 [[ -f "$ARCHIVE" && -f "$ARCHIVE.sha256" ]] || fail "Backup archive and matching .sha256 file are required."
 [[ -f "$ROOT_DIR/.chatroom-install" && "$(cat "$ROOT_DIR/.chatroom-install")" == "$PROJECT_ID" ]] || fail "Valid installation sentinel not found."
-sha256sum --check "$ARCHIVE.sha256" >/dev/null || fail "Backup integrity verification failed."
+if ! sha256sum --check "$ARCHIVE.sha256" >/dev/null; then fail "Backup integrity verification failed."; fi
 
 mapfile -t entries < <(tar -tzf "$ARCHIVE")
-(( ${#entries[@]} > 0 )) || fail "Backup archive is empty."
+if (( ${#entries[@]} == 0 )); then fail "Backup archive is empty."; fi
 for entry in "${entries[@]}"; do
   [[ "$entry" != /* ]] || fail "Unsafe absolute path in backup: $entry"
   [[ "/$entry/" != *"/../"* ]] || fail "Unsafe traversal path in backup: $entry"
 done
-printf '%s\n' "${entries[@]}" | grep -Eq '^data(/|$)' || fail "Backup does not contain data/."
+if ! printf '%s\n' "${entries[@]}" | grep -Eq '^data(/|$)'; then fail "Backup does not contain data/."; fi
 
 PRE_RESTORE_BACKUP="$(CHATROOM_DIR="$ROOT_DIR" BACKUP_ROOT="$BACKUP_ROOT" "$ROOT_DIR/scripts/backup.sh")"
 printf 'Pre-restore safety backup: %s\n' "$PRE_RESTORE_BACKUP"
@@ -30,7 +30,7 @@ STAGE="$(mktemp -d "$(dirname -- "$ROOT_DIR")/.chatroom-restore.XXXXXX")"
 OLD_DATA="${ROOT_DIR}.restore-old-data.$$"
 OLD_UPLOADS="${ROOT_DIR}.restore-old-uploads.$$"
 cleanup() {
-  [[ -d "${STAGE:-}" ]] && rm -rf -- "$STAGE"
+  if [[ -d "${STAGE:-}" ]]; then rm -rf -- "$STAGE"; fi
 }
 trap cleanup EXIT
 
@@ -41,16 +41,18 @@ OWNER="$(stat -c '%U' "$ROOT_DIR/data")"
 GROUP="$(stat -c '%G' "$ROOT_DIR/data")"
 PORT="$(node -e 'const c=require(process.argv[1]); const p=Number(c.port||3000); if(!Number.isInteger(p)||p<1||p>65535) process.exit(2); process.stdout.write(String(p))' "$STAGE/data/config.json")"
 
-if [[ "$SKIP_SERVICE" != "1" ]]; then
-  systemctl stop "$SERVICE_NAME"
-fi
+if [[ "$SKIP_SERVICE" != "1" ]]; then systemctl stop "$SERVICE_NAME"; fi
 
 mv -- "$ROOT_DIR/data" "$OLD_DATA"
 if [[ -d "$ROOT_DIR/public/uploads" ]]; then mv -- "$ROOT_DIR/public/uploads" "$OLD_UPLOADS"; fi
 mv -- "$STAGE/data" "$ROOT_DIR/data"
 mkdir -p -- "$ROOT_DIR/public"
 if [[ -d "$STAGE/public/uploads" ]]; then mv -- "$STAGE/public/uploads" "$ROOT_DIR/public/uploads"; else mkdir -p -- "$ROOT_DIR/public/uploads"; fi
-chown -R "$OWNER:$GROUP" "$ROOT_DIR/data" "$ROOT_DIR/public/uploads"
+if (( EUID == 0 )); then
+  chown -R "$OWNER:$GROUP" "$ROOT_DIR/data" "$ROOT_DIR/public/uploads"
+else
+  [[ "$(id -un)" == "$OWNER" ]] || fail "Non-root restore cannot preserve ownership for $OWNER. Re-run as root."
+fi
 chmod 700 "$ROOT_DIR/data" "$ROOT_DIR/public/uploads"
 
 rollback() {
