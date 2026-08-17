@@ -24,6 +24,28 @@ async function copyDirectory(from, to) {
   }
 }
 
+async function rewriteIndex() {
+  const file = path.join(publicDir, 'index.html');
+  let html = await fsp.readFile(file, 'utf8');
+  html = html.replace(
+    /\s*<!-- Tailwind config MUST be before tailwind script -->[\s\S]*?<script src="https:\/\/cdn\.tailwindcss\.com"><\/script>\s*/,
+    '\n  <link rel="stylesheet" href="/assets/tailwind.css" />\n',
+  );
+  html = html.replace(/\s*<link href="https:\/\/fonts\.googleapis\.com[^>]+>\s*/g, '\n');
+  html = html.replace(
+    /\s*<link rel="stylesheet" href="https:\/\/cdnjs\.cloudflare\.com\/ajax\/libs\/font-awesome[\s\S]*?referrerpolicy="no-referrer" \/>\s*/,
+    '\n  <link rel="stylesheet" href="/vendor/fontawesome/all.min.css" />\n',
+  );
+  html = html.replace(
+    /\s*<script src="https:\/\/unpkg\.com\/vue@[^"]+"[\s\S]*?<\/script>\s*/,
+    '\n  <script src="/vendor/vue.global.prod.js"></script>\n',
+  );
+  if (/cdn\.tailwindcss\.com|unpkg\.com\/vue|fonts\.googleapis\.com|cdnjs\.cloudflare\.com\/ajax\/libs\/font-awesome/.test(html)) {
+    throw new Error('Production CDN references remain in public/index.html after build rewrite.');
+  }
+  await fsp.writeFile(file, html, 'utf8');
+}
+
 async function main() {
   await fsp.rm(vendorDir, { recursive: true, force: true });
   await fsp.mkdir(vendorDir, { recursive: true });
@@ -50,8 +72,9 @@ async function main() {
     path.join(root, 'node_modules', '@fortawesome', 'fontawesome-free', 'webfonts'),
     path.join(vendorDir, 'webfonts'),
   );
+  await rewriteIndex();
 
-  console.log('Frontend assets built into public/assets and public/vendor.');
+  console.log('Frontend assets built into public/assets and public/vendor with no production CDN dependency.');
 }
 
 main().catch((error) => {
