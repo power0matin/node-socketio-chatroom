@@ -45,6 +45,7 @@ All notable changes to this project are documented here.
 - Removed the embedded legacy application source from the installer; the checked-out release is now the single source of truth.
 - Enforced Node.js 20+, npm 10+, lockfile-based `npm ci`, source completeness, safe install paths and readiness verification.
 - Fixed installation into a pre-existing empty target directory while still refusing non-empty unrelated directories.
+- Added rollback when service activation/readiness fails after the staged installation has already been moved into place; the new tree and generated unit are removed only after identity checks and service shutdown succeeds.
 - Added an external verified backup store so updater synchronization cannot delete backups.
 - Added transactional update staging, immutable release refs, atomic locking with stale-lock handling, rollback and post-restart readiness checks.
 - Added verified restore with pre-restore safety backup, archive path validation and readiness-based rollback.
@@ -57,6 +58,7 @@ All notable changes to this project are documented here.
 
 - Added fail-fast validation for ports, bind host, origins, limits, quotas, session TTL, access mode and reserved identifiers.
 - Removed wildcard production-origin fallback and exact-prefix origin matching bugs.
+- Made local defaults accept both `http://localhost:3000` and `http://127.0.0.1:3000`, matching the loopback bind and documented Quick Start.
 - Added reconnect state restoration, undefined-handler cleanup and bounded message histories.
 - Fixed DM notification/unread delivery, reply validation and audio upload/recording cleanup.
 - Replaced runtime Vue template compilation with a build-time precompiled render function and the runtime-only Vue build so the application does not require `unsafe-eval`.
@@ -69,7 +71,9 @@ All notable changes to this project are documented here.
 - Added automated storage, configuration, authentication, authorization, multi-session, DM, upload, upgrade, backup/restore, rollback, update-lock, health/readiness and graceful-shutdown tests.
 - Added Node 20/22 GitHub Actions quality gates with deterministic frontend build, syntax checks, full tests, runtime smoke tests and `npm audit`.
 - Added clean-install/runtime/uninstall lifecycle validation and ShellCheck.
-- Added a real headless Chrome/Chromium render gate to verify that the login UI mounts under the application CSP without raw Vue directives/interpolation.
+- Added a real headless Chrome/Chromium DevTools-protocol render gate to verify that the login UI mounts under the application CSP without raw Vue directives/interpolation or browser runtime errors.
+- Added a forced installer service-activation failure test that must roll back the newly moved installation tree and generated unit.
+- Added `systemd-analyze verify` for the rendered production unit in CI.
 
 ### Documentation
 
