@@ -49,8 +49,9 @@ jobs:
           cache: npm
       - name: Verify release tree dependencies
         run: npm ci
-      - name: Install exact checked-out release
+      - name: Install exact checked-out release into a pre-existing empty directory
         run: |
+          sudo mkdir -p /tmp/node-socketio-chatroom-ci
           sudo env \
             INSTALL_DIR=/tmp/node-socketio-chatroom-ci \
             BACKUP_ROOT=/tmp/node-socketio-chatroom-backups-ci \
@@ -65,9 +66,15 @@ jobs:
           test "$(node -p 'require(process.argv[1]).version' /tmp/node-socketio-chatroom-ci/package.json)" = "1.11.0"
       - name: Start installed runtime and verify graceful shutdown
         run: |
-          sudo -u chatroomci env BACKUP_ROOT=/tmp/node-socketio-chatroom-backups-ci \
-            node /tmp/node-socketio-chatroom-ci/src/server.js > /tmp/chatroom-ci.log 2>&1 &
-          pid=$!
+          rm -f /tmp/chatroom-ci.pid /tmp/chatroom-ci.log
+          sudo -u chatroomci bash -c 'echo $$ > /tmp/chatroom-ci.pid; exec env BACKUP_ROOT=/tmp/node-socketio-chatroom-backups-ci node /tmp/node-socketio-chatroom-ci/src/server.js' > /tmp/chatroom-ci.log 2>&1 &
+          launcher_pid=$!
+          node_pid=""
+          for _ in {1..30}; do
+            if [[ -s /tmp/chatroom-ci.pid ]]; then node_pid="$(cat /tmp/chatroom-ci.pid)"; break; fi
+            sleep 1
+          done
+          test -n "$node_pid"
           ready=0
           for _ in {1..30}; do
             if curl --fail --silent http://127.0.0.1:31888/readyz >/dev/null; then ready=1; break; fi
@@ -75,8 +82,8 @@ jobs:
           done
           if [[ "$ready" != "1" ]]; then cat /tmp/chatroom-ci.log; exit 1; fi
           curl --fail --silent http://127.0.0.1:31888/healthz
-          sudo kill -TERM "$pid"
-          wait "$pid"
+          sudo kill -TERM "$node_pid"
+          wait "$launcher_pid"
           grep -q 'graceful shutdown completed' /tmp/chatroom-ci.log
           test -f /tmp/node-socketio-chatroom-ci/data/state.json
       - name: Safe uninstall retains verified backup
