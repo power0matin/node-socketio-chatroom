@@ -7,12 +7,13 @@
   "scripts": {
     "start": "node src/server.js",
     "build": "node scripts/build-assets.js",
-    "check": "node --check src/server.js && node --check src/lib/config.js && node --check src/lib/logger.js && node --check src/lib/security.js && node --check src/lib/storage.js && node --check src/lib/uploads.js && node --check public/assets/app.js && node --check scripts/build-assets.js && node --check scripts/smoke-test.js",
+    "check": "node --check src/server.js && node --check src/lib/config.js && node --check src/lib/logger.js && node --check src/lib/security.js && node --check src/lib/storage.js && node --check src/lib/uploads.js && node --check public/assets/app.js && node --check scripts/build-assets.js && node --check scripts/smoke-test.js && node --check scripts/browser-smoke.js",
     "test": "node --test --test-concurrency=1 tests/*.test.js",
     "test:unit": "node --test --test-concurrency=1 tests/storage.test.js tests/config.test.js tests/security.test.js",
     "test:integration": "node --test --test-concurrency=1 tests/runtime.test.js tests/upgrade.test.js",
     "test:security": "node --test --test-concurrency=1 tests/security.test.js tests/upload.test.js",
-    "smoke": "node scripts/smoke-test.js"
+    "smoke": "node scripts/smoke-test.js",
+    "browser-smoke": "node scripts/browser-smoke.js"
   },
   "engines": {
     "node": ">=20.0.0",
