@@ -75,9 +75,8 @@ jobs:
           test "$(node -p 'require(process.argv[1]).version' /tmp/node-socketio-chatroom-ci/package.json)" = "1.11.0"
       - name: Start installed runtime and verify graceful shutdown
         run: |
-          rm -f /tmp/chatroom-ci.log
-          sudo -u chatroomci env BACKUP_ROOT=/tmp/node-socketio-chatroom-backups-ci \
-            node /tmp/node-socketio-chatroom-ci/src/server.js > /tmp/chatroom-ci.log 2>&1 &
+          rm -f /tmp/chatroom-ci.log /tmp/chatroom-ci.pid
+          sudo -u chatroomci bash -c 'echo $$ > /tmp/chatroom-ci.pid; exec env BACKUP_ROOT=/tmp/node-socketio-chatroom-backups-ci node /tmp/node-socketio-chatroom-ci/src/server.js' > /tmp/chatroom-ci.log 2>&1 &
           ready=0
           for _ in {1..30}; do
             if curl --fail --silent http://127.0.0.1:31888/readyz >/dev/null; then ready=1; break; fi
@@ -85,7 +84,9 @@ jobs:
           done
           if [[ "$ready" != "1" ]]; then cat /tmp/chatroom-ci.log; exit 1; fi
           curl --fail --silent http://127.0.0.1:31888/healthz
-          sudo pkill -TERM -u chatroomci node
+          test -s /tmp/chatroom-ci.pid
+          node_pid="$(cat /tmp/chatroom-ci.pid)"
+          sudo kill -TERM "$node_pid"
           stopped=0
           for _ in {1..15}; do
             if ! curl --fail --silent http://127.0.0.1:31888/healthz >/dev/null 2>&1; then stopped=1; break; fi
