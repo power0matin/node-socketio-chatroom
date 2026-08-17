@@ -51,6 +51,7 @@ All notable changes to this project are documented here.
 - Fixed backup filename collisions that could otherwise overwrite the selected restore archive when two backups were created in the same second.
 - Added sentinel/package/service identity checks to safe uninstall and a verified final backup before deletion.
 - Preserved executable mode for lifecycle shell scripts.
+- Installer and updater now build/validate frontend assets from the locked dependency graph before pruning development dependencies.
 
 ### Configuration and frontend correctness
 
@@ -58,12 +59,17 @@ All notable changes to this project are documented here.
 - Removed wildcard production-origin fallback and exact-prefix origin matching bugs.
 - Added reconnect state restoration, undefined-handler cleanup and bounded message histories.
 - Fixed DM notification/unread delivery, reply validation and audio upload/recording cleanup.
+- Replaced runtime Vue template compilation with a build-time precompiled render function and the runtime-only Vue build so the application does not require `unsafe-eval`.
+- Changed frontend scripts to deferred loading, eliminating the race where application mounting could occur before `#app` existed.
+- Changed Socket.IO to connect lazily: anonymous login pages no longer keep an unnecessary live socket; login and stored-session resume explicitly connect when required.
+- Generated frontend bundles are no longer source-controlled; CI proves two independent builds are byte-identical by hash.
 
 ### Testing and CI
 
 - Added automated storage, configuration, authentication, authorization, multi-session, DM, upload, upgrade, backup/restore, rollback, update-lock, health/readiness and graceful-shutdown tests.
-- Added Node 20/22 GitHub Actions quality gates with reproducible frontend build, syntax checks, full tests, runtime smoke tests and `npm audit`.
+- Added Node 20/22 GitHub Actions quality gates with deterministic frontend build, syntax checks, full tests, runtime smoke tests and `npm audit`.
 - Added clean-install/runtime/uninstall lifecycle validation and ShellCheck.
+- Added a real headless Chrome/Chromium render gate to verify that the login UI mounts under the application CSP without raw Vue directives/interpolation.
 
 ### Documentation
 
@@ -75,6 +81,7 @@ All notable changes to this project are documented here.
 - Legacy encrypted multi-file data is migrated automatically only when it validates successfully; wrong keys/corrupt data fail closed instead of starting empty.
 - Production now expects TLS termination at the reverse proxy. The Node listener is HTTP and should remain bound to loopback.
 - Installer usage changed: `install.sh` must be run from a complete release checkout rather than downloaded as a standalone script.
+- Frontend build output is generated during development/install/update and is intentionally excluded from Git; run `npm run build` before manual `npm start` in a clean checkout.
 
 ## [1.10.0] - 2026-07-17
 
