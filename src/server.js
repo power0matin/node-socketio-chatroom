@@ -981,13 +981,20 @@ async function createApplication(options = {}) {
     ready = false;
     clearInterval(cleanupInterval);
     logger.info(APP_COMPONENT, 'graceful shutdown started', { signal });
-    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('graceful shutdown timeout')), 8000));
+    let timeoutId;
+    const timeout = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error('graceful shutdown timeout')), 8000);
+    });
     const close = (async () => {
       await store.flush();
       await new Promise((resolve) => io.close(resolve));
       if (server.listening) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     })();
-    await Promise.race([close, timeout]);
+    try {
+      await Promise.race([close, timeout]);
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
     logger.info(APP_COMPONENT, 'graceful shutdown completed', { signal });
   }
 
