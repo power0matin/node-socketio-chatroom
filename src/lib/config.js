@@ -48,9 +48,14 @@ function boolean(name, value) {
   return value;
 }
 
+function validUsername(value) {
+  const s = String(value || '').trim();
+  return /^[A-Za-z0-9][A-Za-z0-9_.-]{2,31}$/.test(s) && !s.includes('_pv_') && !s.startsWith('__saved__');
+}
+
 function username(value) {
   const s = String(value || '').trim();
-  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{2,31}$/.test(s) || s.includes('_pv_') || s.startsWith('__saved__')) {
+  if (!validUsername(s)) {
     throw new ConfigError('adminUser must be 3-32 characters using letters, digits, dot, dash or underscore and may not contain reserved identifiers.');
   }
   return s;
@@ -132,8 +137,10 @@ async function loadConfig(dataDir, env = process.env) {
   if (env.TRUST_PROXY !== undefined) merged.trustProxy = env.TRUST_PROXY === '1';
   const cfg = validateConfig(merged);
 
-  if (legacyDataEncKey !== undefined) changed = true;
+  // Crash-safe migration rule: retain legacy dataEncKey on disk until the caller
+  // has durably created .data-key AND validated/decrypted all persistence.
   const persistable = { ...cfg };
+  if (legacyDataEncKey !== undefined) persistable.dataEncKey = legacyDataEncKey;
   if (changed || JSON.stringify(persistable) !== JSON.stringify(raw)) await atomicWriteJson(file, persistable, 0o600);
   return { config: cfg, file, legacyDataEncKey };
 }
@@ -144,4 +151,4 @@ async function saveConfig(file, config) {
   return validated;
 }
 
-module.exports = { ConfigError, DEFAULTS, loadConfig, saveConfig, validateConfig, origins };
+module.exports = { ConfigError, DEFAULTS, loadConfig, saveConfig, validateConfig, origins, validUsername };
