@@ -1,10 +1,14 @@
-name: Refresh lockfile
+name: Refresh generated files
 
 on:
   push:
     branches: [agent/production-hardening]
     paths:
       - package.json
+      - tailwind.config.js
+      - src/styles.css
+      - scripts/build-assets.js
+      - public/index.html
       - .github/workflows/lockfile-refresh.yml
 
 permissions:
@@ -21,16 +25,20 @@ jobs:
         with:
           node-version: '20'
           cache: npm
-      - name: Refresh package lock only
+      - name: Refresh deterministic lockfile
         run: npm install --package-lock-only --ignore-scripts
-      - name: Commit deterministic lockfile
+      - name: Install exact dependencies
+        run: npm ci
+      - name: Build self-hosted frontend assets
+        run: npm run build
+      - name: Commit generated files
         run: |
-          if git diff --quiet -- package-lock.json; then
-            echo "package-lock.json already matches package.json"
+          if git diff --quiet -- package-lock.json public/index.html public/assets/tailwind.css public/vendor; then
+            echo "Generated files already match sources"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package-lock.json
-          git commit -m "build: refresh package lock"
+          git add package-lock.json public/index.html public/assets/tailwind.css public/vendor
+          git commit -m "build: refresh generated frontend assets"
           git push origin HEAD:agent/production-hardening
