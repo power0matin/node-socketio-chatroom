@@ -46,6 +46,7 @@ This file records repository-level issues addressed for the `1.11.0` hardening w
 - Graceful shutdown timeout timer — newly discovered: shutdown deadline is cleared on successful close rather than keeping the event loop alive.
 - **Vue runtime compiler incompatible with strict CSP** — newly discovered: the full Vue browser build compiles in-DOM templates dynamically; the application CSP deliberately does not permit `unsafe-eval`. The build now precompiles the template, serves the runtime-only Vue build and rejects generated render code requiring dynamic evaluation.
 - **Frontend mount race / anonymous persistent socket** — newly discovered: scripts previously ran in `<head>` without `defer`, and the anonymous login page opened a Socket.IO transport immediately. Generated scripts are now deferred in dependency order, and the client connects only for login or stored-session resume.
+- **Failed service activation left a partial installation** — newly discovered in the final audit: after the staged tree was moved into `INSTALL_DIR`, a later `systemctl enable/start` or readiness failure could leave the sentinel/tree/unit behind. The installer now explicitly rolls the new installation back after stopping/disabling the generated service; if safe shutdown cannot be confirmed it retains the tree for operator recovery instead of destructively deleting it.
 
 ## P2/P3 production-impacting items addressed
 
@@ -55,6 +56,7 @@ This file records repository-level issues addressed for the `1.11.0` hardening w
 - Filesystem I/O and bcrypt operations in runtime paths are asynchronous.
 - Configuration has centralized fail-fast validation.
 - Exact origin parsing replaces prefix matching.
+- Local default origins now include both `localhost:3000` and `127.0.0.1:3000`, matching the default loopback bind and documented local URL.
 - Production frontend dependencies are self-hosted and generated deterministically from the lockfile.
 - Vue templates are build-time precompiled; generated render output is checked for dynamic evaluation.
 - Missing frontend handler paths from the legacy UI were removed/aligned with the current client.
@@ -91,9 +93,11 @@ The GitHub Actions workflow is the source of truth for the automated gate and in
 - `npm audit --audit-level=high`;
 - dependency freshness reporting;
 - Bash parsing and ShellCheck;
+- a rendered-unit `systemd-analyze verify` check;
 - clean install from the checked-out release, including frontend build inside the installer;
 - installed `/healthz`/`/readyz` checks;
 - installed-process SIGTERM/graceful-shutdown verification;
-- safe uninstall with retained verified backup.
+- safe uninstall with retained verified backup;
+- forced `systemctl enable` failure proving a newly moved install tree/unit is rolled back.
 
 A release must not be called production-ready while a required CI gate is red. See the production-hardening PR for the current run status.
