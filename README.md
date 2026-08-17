@@ -1,353 +1,373 @@
-# Node Socket.IO Chatroom (Hardened) — Real-time Multi-Room Chat
+# Node Socket.IO Chatroom
 
-[![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![PM2](https://img.shields.io/badge/PM2-Process%20Manager-2B037A?logo=pm2&logoColor=white)](https://pm2.keymetrics.io/)
-[![Socket.IO](https://img.shields.io/badge/Socket.IO-4.x-010101?logo=socket.io&logoColor=white)](https://socket.io/)
-[![Express](https://img.shields.io/badge/Express-4.x-000000?logo=express&logoColor=white)](https://expressjs.com/)
-[![License](https://img.shields.io/badge/License-See%20LICENSE-blue)](./LICENSE)
+A hardened single-host real-time chat application built with Node.js, Express, Socket.IO and a self-hosted Vue/Tailwind frontend.
 
-A production-ready, real-time chatroom built with **Node.js + Express + Socket.IO** with an **interactive installer**, persistent storage, roles (Admin/VIP/User), multi-channels, private chats, uploads, and security hardening (**rate limiting**, **bcrypt hashed passwords**, **upload token protection**, **MIME/extension allowlists**).
+Version `1.11.0` is the production-hardening release candidate. The repository includes encrypted persistence, session restoration, multi-session authorization, protected uploads, verified backup/restore, transactional updates, a systemd service, health/readiness endpoints and automated CI.
 
-> **Client UI:** RTL Persian (Fa)  
-> **Server logs:** English
+## Supported deployment model
 
-## Table of Contents
-
-- [Features](#-features)
-- [Screenshots](#-screenshots)
-- [Tech Stack](#-tech-stack)
-- [Project Structure](#-project-structure)
-- [Quick Start (Local)](#-quick-start-local)
-- [Production Install (Ubuntu/Debian)](#-production-install-ubuntudebian)
-- [Management CLI](#-management-cli)
-- [Configuration](#-configuration)
-- [Upload Tokens](#-upload-tokens)
-- [Reverse Proxy (Nginx)](#-reverse-proxy-nginx)
-- [Security Notes](#-security-notes)
-- [Troubleshooting](#-troubleshooting)
-- [Roadmap](#-roadmap)
-- [Contributing](#-contributing)
-- [License](#-license)
-
-## ✨ Features
-
-### 💬 Chat
-
-- **Real-time messaging** with Socket.IO
-- **Public channels** (create/delete for Admin/VIP)
-- **Private chats (PV)** with deterministic room naming (`userA_pv_userB`)
-- **Reply to message** UX (swipe / context menu)
-- **Unread counters** for channels and private chats
-- **Notifications** (browser notifications + sound)
-- **Saved Messages** per-user private room (`__saved__<username>`)
-- **Channel access modes**: `restricted` (admin grants access) vs `open` (all users)
-
-### 🛡️ Roles & Moderation
-
-- Roles: **Admin / VIP / User**
-- **Ban / Unban** users (Admin/VIP)
-- **Message deletion** (Admin)
-- Optional **Hide online user list** for normal users (Admin setting)
-
-### 📎 Uploads (Protected)
-
-- Upload endpoint with:
-  - **IP rate limiting**
-  - **Authenticated uploads via token** (prevents anonymous disk abuse)
-  - Optional **download protection via token query** (`protectUploads`)
-  - When `protectUploads: true`, downloads require a valid token via `?t=...` or `X-Upload-Token`
-  - **MIME + extension allowlists**
-  - **Max upload size** configurable
-
-### 💾 Persistence (Local JSON)
-
-Stored under `data/`:
-
-- `config.json` (runtime config)
-- `users.json` (hashed passwords, roles, ban state)
-- `channels.json` (public channels)
-- `messages.json` (message history for public channels, DMs, and Saved Messages)
-- `conversations.json` (conversation registry: public + dm + saved)
-- `memberships.json` (access control map; used when `accessMode: restricted`)
-- `attachments.json` (reserved metadata; optional)
-
-Includes **atomic JSON writes** to reduce corruption risk.
-
-### 🔒 Security Hardening
-
-- **HTTPS by default** — auto-generates self-signed cert (requires `openssl`) or falls back to HTTP; use `TLS_CERT_FILE`/`TLS_KEY_FILE` env vars for real certs, or `NO_TLS=1` behind a reverse proxy
-- **Data-at-rest encryption** — AES-256-GCM for all JSON persistence files; encryption key auto-generated on first run and stored in `data/.data-key`
-- `helmet` with strict CSP (no `'unsafe-inline'` for scripts)
-- `Strict-Transport-Security` (HSTS) with preload
-- `Permissions-Policy` — disables camera, microphone, geolocation
-- `X-Content-Type-Options: nosniff`
-- `X-Frame-Options: DENY`
-- `Referrer-Policy: strict-origin-when-cross-origin`
-- JSON body limit (`10kb`)
-- Input sanitization (`xss`)
-- Password hashing with `bcryptjs` (12 rounds)
-- Upload protection (token + allowlists + limits, 1-hour token expiry)
-- Message rate-limiting (anti-spam)
-- Login rate-limiting (brute-force protection)
-
-## 📸 Screenshots
-
-> Add screenshots/gifs under `./assets/` and update links below.
-
-```md
-![Login](./assets/login.png)
-![Chat](./assets/chat.png)
-```
-
-## 🧱 Tech Stack
-
-- **Backend**: Node.js, Express, Socket.IO
-- **Security**: helmet, express-rate-limit, bcryptjs, xss
-- **Uploads**: multer
-- **Frontend**: Vue 3 (CDN), TailwindCSS (CDN), FontAwesome (CDN)
-
-## 📁 Project Structure
+The production architecture is intentionally unambiguous:
 
 ```text
-.
-├─ install.sh
-├─ server.js
-├─ package.json
-├─ public/
-│  ├─ index.html
-│  └─ uploads/                 # uploaded files (restricted permissions)
-└─ data/
-   ├─ config.json              # runtime configuration (hashed admin password)
-   ├─ users.json               # users + roles + ban state (hashed user passwords)
-   ├─ channels.json            # channels list
-   ├─ messages.json            # channel histories (public + dm + saved)
-   ├─ conversations.json       # conversation registry (public + dm + saved)
-   ├─ memberships.json         # per-channel access control (restricted/open mode)
-   └─ attachments.json         # (reserved) metadata storage
+Internet
+  ↓ HTTPS
+Nginx / TLS termination
+  ↓ HTTP on loopback only
+Node.js (127.0.0.1:<port>)
 ```
 
-## 🚀 Quick Start (Local)
+Do not expose the Node backend directly to the Internet in the recommended deployment. The application trusts forwarded client IP information only when the immediate peer is loopback.
 
-### Requirements
+## Requirements
 
-- Node.js **20+**
-- npm **9+**
+Development / CI:
 
-### Run
+- Node.js 20 or 22 (`>=20` is enforced)
+- npm 10+
+
+Production installer:
+
+- Ubuntu/Debian-class Linux with systemd
+- root/sudo access
+- Node.js 20+
+- npm 10+
+- `rsync`, `curl`, `tar`, `sha256sum`
+- Nginx (recommended for public HTTPS)
+
+The installer does not bootstrap an old embedded copy of the application. It installs the exact checked-out release tree and uses `package-lock.json` with `npm ci`.
+
+## Quick start for local development
 
 ```bash
 git clone https://github.com/power0matin/node-socketio-chatroom.git
 cd node-socketio-chatroom
-
-npm install
+npm ci
+npm run build
+npm test
 npm start
 ```
 
-Open:
+The default local listener is `http://127.0.0.1:3000` unless configuration changes it. The normal-user login path creates a user on first successful login. Production admin credentials should be created by the installer rather than by hand.
 
-- [http://localhost:3000](http://localhost:3000)
-
-> Note: If `dataEncKey` is set in `data/config.json`, JSON persistence files may be stored encrypted (AES-256-GCM wrapper).
-
-## 🧰 Production Install (Ubuntu/Debian)
-
-This repository includes an **interactive one-command installer**: `install.sh`.
-
-It will:
-
-- install Node.js 20 (if missing) and PM2
-- set up app directory, config, and permissions
-- install dependencies
-- start the server via PM2
-- install a management CLI command: `node-socketio-chatroom`
-
-✅ **Client is single-file (installer-generated):**
-
-- UI + Client JS + Styles are embedded into: `public/index.html` (CDN-based)
-- Theme vars are injected by installer placeholders:
-  - `__APP_NAME_PLACEHOLDER__`
-  - `__COLOR_DEFAULT__`, `__COLOR_DARK__`, `__COLOR_LIGHT__`
-
-### Requirements
-
-- Ubuntu/Debian VPS
-- A user with `sudo` access
-- Firewall allows your chosen port (default `3000`)
-
-### Install (Recommended)
+Useful commands:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/power0matin/node-socketio-chatroom/main/install.sh)
+npm run build
+npm run check
+npm test
+npm run test:unit
+npm run test:integration
+npm run test:security
+npm run smoke
+npm run browser-smoke
+npm audit --audit-level=high
+npm outdated
 ```
 
-At the end, you will get:
+## Production installation
 
-- URL: `http://<server-ip>:<port>`
-- CLI command: `node-socketio-chatroom`
+Use a complete checkout of the exact tag/commit you intend to deploy. Do not pipe only `install.sh` from the Internet; the installer intentionally refuses to run without the rest of the release tree.
 
-### Manual Run (Dev / without installer)
+Example:
 
 ```bash
-npm install
-node server.js
-# open: http://localhost:3000
+git clone https://github.com/power0matin/node-socketio-chatroom.git
+cd node-socketio-chatroom
+git checkout <release-tag-or-full-sha>
+
+sudo env \
+  INSTALL_DIR=/opt/node-socketio-chatroom \
+  BACKUP_ROOT=/var/backups/node-socketio-chatroom \
+  PORT=3000 \
+  PUBLIC_ORIGIN=https://chat.example.com \
+  ADMIN_PASSWORD='replace-with-a-long-random-password' \
+  ./install.sh
 ```
 
-### Notes
+The installer:
 
-- The installer writes a complete `public/index.html` (Vue 3 + Tailwind + FontAwesome via CDN).
-- If you use a reverse proxy (Nginx), set `allowedOrigins` to your domain (recommended) and restart.
-- The CLI updates `data/config.json` and restarts the PM2 process automatically.
+1. validates Node/npm and required tools;
+2. rejects unsafe or unrelated install paths;
+3. stages the exact checked-out source tree;
+4. installs the exact locked dependency graph with `npm ci`;
+5. builds the self-hosted frontend and runs syntax validation before pruning development-only packages;
+6. runs a high-severity production dependency audit;
+7. creates a bcrypt-hashed admin credential and validated config;
+8. creates an installation sentinel and restrictive permissions;
+9. installs/enables a version-controlled systemd unit;
+10. starts the service;
+11. polls `/readyz` before reporting success.
 
-## 🧑‍💻 Management CLI
+The service uses `Restart=on-failure`, starts automatically at boot through `WantedBy=multi-user.target`, runs as a dedicated unprivileged user and receives SIGTERM for graceful shutdown.
 
-After installation:
+## Configuration
 
-```bash
-node-socketio-chatroom
-```
+Runtime configuration is stored in `data/config.json`. Invalid configuration fails fast with a descriptive error before the server listens.
 
-Menu actions include:
+Important fields include:
 
-- status / restart / stop
-- view logs
-- change admin username/password (stored hashed)
-- change max upload size
-- change app name
-- change allowed origins
-- uninstall
+| Key | Purpose |
+| --- | --- |
+| `adminUser` | Administrative username. Reserved identifiers are rejected. |
+| `adminPassHash` | bcrypt admin password hash. Never store plaintext passwords. |
+| `adminSessionVersion` | Revocation generation for admin sessions. |
+| `port` | TCP port, integer `1..65535`. |
+| `bindHost` | Production default `127.0.0.1`. |
+| `allowedOrigins` | Explicit HTTP/HTTPS origins. Wildcard origins are rejected. |
+| `trustProxy` | Enables forwarded-IP handling only from a loopback peer. |
+| `maxFileSizeMB` | Maximum size of one upload. |
+| `maxFilesPerUser` | Per-user file-count ceiling. |
+| `userQuotaMB` | Per-user stored upload quota. |
+| `globalQuotaMB` | Global stored upload quota. |
+| `minFreeDiskMB` | Minimum free disk space that must remain after an upload. |
+| `uploadRetentionDays` | Attachment retention period. |
+| `accessMode` | `restricted` or `open`. |
+| `defaultChannelsForNewUsers` | Initial memberships in restricted mode. |
+| `maxChannelMessages` | Bounded public-channel history. |
+| `maxDmMessages` | Bounded DM history. |
+| `maxSavedMessages` | Bounded saved-message history. |
+| `sessionTtlHours` | Signed session lifetime. |
 
-## ⚙️ Configuration
+Supported environment overrides include `PORT`, `BIND_HOST`, `ALLOWED_ORIGINS`, `TRUST_PROXY`, `DATA_DIR`, `BACKUP_ROOT` and `DATA_ENC_KEY`. If `DATA_ENC_KEY` is used, it must remain stable for existing encrypted data. A wrong key is treated as a startup failure, not as an empty database.
 
-Runtime configuration is stored in:
+## Persistence and data safety
+
+Persistent application state is stored as authenticated AES-256-GCM data in `data/state.json`. The encryption key is stored separately in `data/.data-key` unless a validated `DATA_ENC_KEY` is supplied. Session and download-capability secrets are stored separately in the protected data directory.
+
+The loader distinguishes:
+
+- missing state: allowed for a new installation;
+- wrong encryption key: fatal;
+- corrupt/authentication-failed state: fatal;
+- legacy multi-file persistence: migrated only after validation and a verified backup.
+
+State writes use a temporary file, file synchronization, atomic rename and directory synchronization. Persistence errors propagate to readiness/shutdown rather than being silently converted to empty state.
+
+The legacy installer `dataEncKey` is migrated to the dedicated key file before legacy encrypted data is rewritten. Upgrade tests verify users, messages and permissions survive the migration.
+
+## Authentication, reconnect and multi-session behavior
+
+Login sessions are signed and persisted. Socket.IO transport reconnect is not treated as authentication: the browser explicitly resumes its signed session and then rejoins the current view.
+
+The anonymous login screen does not keep an unnecessary Socket.IO connection open. The browser connects when a login is submitted or when a stored session needs to be resumed.
+
+Password changes, bans and role changes revoke or refresh every active session for the affected username, not only one socket/tab. Authorization checks are performed server-side for channels, DMs, replies, saved messages, uploads and administrative actions.
+
+## Direct messages
+
+DM membership and participant identifiers are validated server-side. A connected user joins a personal delivery room after authentication, so a recipient receives persisted DM events and unread updates even when that DM view is not currently open.
+
+## Upload security and disk protection
+
+`POST /upload` requires an authenticated session header. The upload parser accepts one file and zero text fields, with explicit limits on file count, multipart parts and file size. MIME type and extension pairs are allowlisted.
+
+Additional controls include:
+
+- per-IP upload rate limiting;
+- exact-origin validation;
+- per-user file-count and byte quotas;
+- global byte quota;
+- minimum free-disk guard;
+- retention cleanup;
+- orphan cleanup;
+- owner validation before an attachment can be sent;
+- separate download capability tokens instead of placing the raw session token in file URLs;
+- session revocation on logout/password change/ban.
+
+Uploaded files are not exposed through a public static directory. Downloads go through `/uploads/:id` and require a valid capability.
+
+## Health and readiness
 
 ```text
-data/config.json
+GET /healthz
+GET /readyz
 ```
 
-### Supported options
+`/healthz` answers whether the process is operational and not shutting down. `/readyz` additionally requires the application persistence layer to be safe to serve traffic.
 
-| Key                          | Type                   | Description                                                             |
-| ---------------------------- | ---------------------- | ----------------------------------------------------------------------- |
-| `adminUser`                  | string                 | Admin username                                                          |
-| `adminPassHash`              | string                 | Admin bcrypt hash                                                       |
-| `port`                       | number                 | Server port                                                             |
-| `maxFileSizeMB`              | number                 | Upload limit                                                            |
-| `appName`                    | string                 | UI title                                                                |
-| `hideUserList`               | boolean                | Hide online users list from normal users                                |
-| `allowedOrigins`             | `*` or string/array    | Socket.IO CORS allowlist (`*` or comma-separated / array)               |
-| `protectUploads`             | boolean                | If `true`, downloads require token (`?t=...` or `X-Upload-Token`)       |
-| `dataEncKey`                 | string (hex, 64 chars) | AES-256-GCM key for encrypting JSON at rest (auto-generated if empty)   |
-| `accessMode`                 | `restricted` \| `open` | Channel policy: restricted needs membership; open allows all            |
-| `defaultChannelsForNewUsers` | array of strings       | Auto-grant membership to new users (only meaningful in restricted mode) |
+Install, restart, update and restore operations use readiness checks instead of trusting process-manager status alone.
 
-> Tip: Prefer using the built-in CLI to edit config safely instead of manual JSON edits.
+## Nginx reverse proxy / TLS
 
-## 🔐 Upload Tokens
-
-After login, the server issues a temporary **upload token** (default **1 hour**).
-
-- Upload request must include header: `X-Upload-Token: <token>`
-- When `protectUploads: true`, file URLs should include: `?t=<token>`
-  - The client already appends this automatically when `uploadToken` exists.
-
-This prevents:
-
-- anonymous upload abuse
-- public access to uploaded files (when protection is enabled)
-
-## 🔑 Environment Variables
-
-| Variable          | Description                                          |
-| ----------------- | ---------------------------------------------------- |
-| `PORT`            | Server port (default: `3000`)                        |
-| `NO_TLS`          | Set to `1` to disable HTTPS (for reverse proxy)      |
-| `TLS_CERT_FILE`   | Path to TLS certificate file                         |
-| `TLS_KEY_FILE`    | Path to TLS private key file                         |
-| `DATA_ENC_KEY`    | Override the auto-generated data encryption key       |
-
-## 🌐 Reverse Proxy (Nginx)
-
-Recommended for:
-
-- HTTPS
-- domain-based access
-- better security and observability
-
-Example Nginx site:
+Terminate HTTPS at Nginx and proxy to the loopback HTTP backend:
 
 ```nginx
 server {
-  server_name yourdomain.com;
+    listen 443 ssl http2;
+    server_name chat.example.com;
 
-  location / {
-    proxy_pass http://127.0.0.1:3000;
-    proxy_http_version 1.1;
+    # ssl_certificate ...;
+    # ssl_certificate_key ...;
 
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
-    proxy_set_header Host $host;
+    client_max_body_size 51m;
 
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-  }
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
 }
 ```
 
-Then set `allowedOrigins` to `https://yourdomain.com` (recommended) and restart the app.
+Set `allowedOrigins` / `PUBLIC_ORIGIN` to the exact public HTTPS origin, for example `https://chat.example.com`.
 
-## 🔒 Security Notes
+Do not configure Nginx to proxy HTTP to a TLS-enabled Node listener; the hardened runtime intentionally has one TLS architecture: TLS at the reverse proxy, HTTP on loopback to Node.
 
-- Use a **strong admin password** during installation.
-- Do **not** keep `allowedOrigins: "*"` on a public server unless you explicitly want open access.
-- Keep `protectUploads: true` if you want uploaded content to be non-public.
+## Frontend and audio
 
-> CSP is disabled intentionally because the current UI uses inline scripts and CDN resources.
-> If you want CSP, migrate the UI to self-hosted assets + remove inline scripts.
+Production frontend dependencies are self-hosted and reproducibly generated by `npm run build`; generated bundles under `public/vendor/`, `public/assets/tailwind.css` and `public/assets/render.js` are intentionally not committed.
 
-## 🧯 Troubleshooting
+The build precompiles the in-DOM Vue template into `public/assets/render.js`, copies the Vue runtime-only build, and loads Socket.IO, Vue, the render function and application code with deferred self-hosted scripts. The generated render function is checked to contain no dynamic `new Function`/`unsafe-eval` requirement. CI performs two independent builds and requires identical hashes, then runs a headless-browser CSP smoke test against the real HTTP application.
 
-### Port already in use
+Voice recording requests browser microphone permission. The server sends `Permissions-Policy: microphone=(self)` and the client stops `MediaStream` tracks on stop/error/cancel paths. Browser permission can still be denied by the user or browser policy.
 
-Change the port in `data/config.json` (or via CLI), then restart:
+## Backup
+
+Backups are stored outside the application directory so updater synchronization cannot delete them.
 
 ```bash
-pm2 restart <your-app-name>
+sudo env \
+  CHATROOM_DIR=/opt/node-socketio-chatroom \
+  BACKUP_ROOT=/var/backups/node-socketio-chatroom \
+  /opt/node-socketio-chatroom/scripts/backup.sh
 ```
 
-### Upload returns `401 Unauthorized`
+Each archive receives a collision-safe name and a matching `.sha256`. Creation verifies both archive readability and checksum. Existing backups are never silently overwritten.
 
-Common causes:
+## Restore
 
-- Missing `X-Upload-Token` header on `/upload`
-- Expired token (log out / re-login)
-- `protectUploads: true` but the file URL does not include `?t=<token>`
+```bash
+sudo env \
+  CHATROOM_DIR=/opt/node-socketio-chatroom \
+  BACKUP_ROOT=/var/backups/node-socketio-chatroom \
+  /opt/node-socketio-chatroom/scripts/restore.sh \
+  /var/backups/node-socketio-chatroom/chatroom-backup-<timestamp>-<suffix>.tar.gz
+```
 
-### CORS / Socket.IO connection issues
+Restore verifies the checksum and archive paths, makes a separate pre-restore safety backup, stages restored data, preserves ownership, restarts the service, checks readiness and rolls back to the previous data if the restored service does not become ready.
 
-Set `allowedOrigins` to:
+## Updating
 
-- `https://yourdomain.com` (recommended)
-- or `https://yourdomain.com,http://localhost:3000`
+Use an immutable release tag or full commit SHA:
 
-Then restart the PM2 process.
+```bash
+sudo env \
+  CHATROOM_DIR=/opt/node-socketio-chatroom \
+  BACKUP_ROOT=/var/backups/node-socketio-chatroom \
+  /opt/node-socketio-chatroom/scripts/update.sh --ref <release-tag-or-full-sha>
+```
 
-## 🗺️ Roadmap
+The updater uses an external atomic lock with stale-lock handling, creates and verifies a backup, stages the release, performs a full locked dependency install, rebuilds and validates frontend/runtime assets, prunes development dependencies, audits production dependencies, validates persistence/migration, swaps code without deleting persistent data, restarts and polls readiness. On post-swap failure it restores the previous code and verifies the rollback.
 
-- Optional DB storage (SQLite/Postgres)
-- CSP support (self-hosted assets)
-- Admin dashboard (web UI) for roles/channels/messages
-- Media thumbnails + malware scanning hooks
+For controlled local testing, `--source /path/to/release-tree` can be used instead of a network ref.
 
-## 🤝 Contributing
+## Management menu
 
-PRs are welcome. Please:
+From an installed tree:
 
-- keep changes small and well-scoped
-- preserve backward compatibility for `data/*.json`
-- document config changes in the README
+```bash
+sudo /opt/node-socketio-chatroom/menu.sh
+```
 
-## 📜 License
+The menu exposes status, restart+readiness, recent logs, verified backup, immutable-ref update, verified restore and safe uninstall. It delegates lifecycle behavior to the version-controlled scripts instead of maintaining a second updater implementation.
 
-See [`LICENSE`](./LICENSE).
+## Safe uninstall
+
+```bash
+sudo env \
+  CHATROOM_DIR=/opt/node-socketio-chatroom \
+  BACKUP_ROOT=/var/backups/node-socketio-chatroom \
+  /opt/node-socketio-chatroom/scripts/uninstall.sh
+```
+
+Uninstall requires the project sentinel and package identity, rejects symlinks and protected/broad paths, creates a verified final backup, verifies that any systemd unit points to the same installation, then removes only that installation tree. The external backup is retained.
+
+## Reboot recovery and service operations
+
+```bash
+sudo systemctl status node-socketio-chatroom
+sudo systemctl restart node-socketio-chatroom
+sudo journalctl -u node-socketio-chatroom -n 100 --no-pager
+sudo systemctl is-enabled node-socketio-chatroom
+```
+
+A production installation enables the unit at boot. After a real host reboot, verify both `systemctl is-active node-socketio-chatroom` and `/readyz`.
+
+## CI and release gate
+
+GitHub Actions tests Node 20 and Node 22. The gate includes:
+
+- `npm ci`;
+- two deterministic frontend builds with hash comparison;
+- JavaScript syntax checks;
+- unit/integration/security/upgrade/lifecycle tests;
+- runtime smoke test;
+- headless Chrome/Chromium render check under the application CSP;
+- `npm audit --audit-level=high`;
+- `npm outdated` freshness reporting without treating known major-version availability as a vulnerability;
+- Bash parse checks and ShellCheck;
+- clean installation into a pre-existing empty directory;
+- installed-runtime health/readiness and SIGTERM shutdown;
+- safe uninstall with a retained verified backup.
+
+## Repository layout
+
+```text
+.github/workflows/ci.yml
+deploy/node-socketio-chatroom.service
+public/
+  index.html
+  assets/
+    app.js
+    app.css
+    theme.css
+    # tailwind.css + render.js are generated
+  vendor/                  # generated by npm run build
+scripts/
+  backup.sh
+  browser-smoke.js
+  build-assets.js
+  restore.sh
+  smoke-test.js
+  uninstall.sh
+  update.sh
+src/
+  lib/
+  server.js
+  styles.css
+tests/
+install.sh
+menu.sh
+package.json
+package-lock.json
+```
+
+Runtime `data/`, uploads, backups, logs, keys, locks and generated frontend bundles are excluded from Git.
+
+## Operational limits
+
+This release intentionally remains a single-host, single-Node-process application with encrypted local JSON state. Histories and upload storage are bounded and filesystem/bcrypt work in hot paths is asynchronous, but each durable state mutation still rewrites the encrypted state snapshot. That is appropriate for a small/moderate single-host chat deployment, not for a high-volume horizontally scaled service. Redis/PostgreSQL/SQLite or a journaled persistence layer should be evaluated before expanding the documented scale profile.
+
+No built-in malware scanner is provided for uploads; MIME/extension validation is not a substitute for malware scanning in hostile file-sharing deployments.
+
+## Troubleshooting
+
+If startup fails, check:
+
+```bash
+sudo journalctl -u node-socketio-chatroom -n 200 --no-pager
+```
+
+Common causes are invalid config, an unavailable port, a mismatched encryption key, corrupt encrypted state, wrong ownership/permissions or an origin mismatch.
+
+If Nginx returns `502`, confirm Node is listening on the configured loopback port and that Nginx uses `http://127.0.0.1:<port>`.
+
+If uploads return `401`, the browser session may be invalid/revoked. If they return `403`, check the exact configured origin. `413`, `429`, `507` and `503` respectively indicate request-size, file-count/rate, storage-quota/free-space or storage-health rejection paths.
+
+## License
+
+See [LICENSE](./LICENSE).

@@ -1,0 +1,217 @@
+name: CI
+
+on:
+  push:
+    branches: [main, agent/production-hardening]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Node ${{ matrix.node }} quality gate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: Install exact dependency graph
+        run: npm ci
+      - name: Verify generated frontend is reproducible
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          hash_frontend() {
+            {
+              printf '%s\0' public/index.html public/assets/tailwind.css public/assets/render.js
+              find public/vendor -type f -print0
+            } | sort -z | xargs -0 sha256sum
+          }
+          npm run build
+          hash_frontend > /tmp/frontend-build-1.sha256
+          npm run build
+          hash_frontend > /tmp/frontend-build-2.sha256
+          diff -u /tmp/frontend-build-1.sha256 /tmp/frontend-build-2.sha256
+          grep -q '<script defer src="/assets/render.js"></script>' public/index.html
+          grep -q '<script defer src="/assets/app.js"></script>' public/index.html
+          if grep -Eq 'new[[:space:]]+Function|unsafe-eval' public/assets/render.js; then
+            echo 'Generated render asset uses forbidden dynamic evaluation.' >&2
+            exit 1
+          fi
+      - name: Syntax checks
+        run: npm run check
+      - name: Unit integration upgrade lifecycle and security tests
+        run: npm test
+      - name: Runtime smoke test
+        run: npm run smoke
+      - name: Real browser CSP smoke test
+        if: matrix.node == '22'
+        run: npm run browser-smoke
+      - name: Dependency security audit
+        run: npm audit --audit-level=high
+      - name: Dependency freshness report
+        shell: bash
+        run: |
+          set +e
+          npm outdated
+          status=$?
+          set -e
+          # npm uses status 1 when outdated packages are reported. Any status >1 is a real tool/network failure.
+          if (( status > 1 )); then exit "$status"; fi
+
+  clean-install:
+    name: Clean install + runtime + uninstall + rollback
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Verify release tree dependencies
+        run: npm ci
+      - name: Install exact checked-out release into a pre-existing empty directory
+        run: |
+          sudo mkdir -p /tmp/node-socketio-chatroom-ci
+          sudo env \
+            INSTALL_DIR=/tmp/node-socketio-chatroom-ci \
+            BACKUP_ROOT=/tmp/node-socketio-chatroom-backups-ci \
+            INSTALL_USER=chatroomci \
+            INSTALL_GROUP=chatroomci \
+            PORT=31888 \
+            PUBLIC_ORIGIN=http://127.0.0.1:31888 \
+            ADMIN_PASSWORD='CI-Admin-Password-123!' \
+            SKIP_SYSTEMD=1 \
+            ./install.sh
+          test -f /tmp/node-socketio-chatroom-ci/.chatroom-install
+          test "$(node -p 'require(process.argv[1]).version' /tmp/node-socketio-chatroom-ci/package.json)" = "1.11.0"
+          test -s /tmp/node-socketio-chatroom-ci/public/assets/render.js
+          test -s /tmp/node-socketio-chatroom-ci/public/vendor/vue.global.prod.js
+          grep -q '<script defer src="/assets/render.js"></script>' /tmp/node-socketio-chatroom-ci/public/index.html
+      - name: Start installed runtime and verify graceful shutdown
+        run: |
+          rm -f /tmp/chatroom-ci.log
+          sudo -u chatroomci env \
+            BACKUP_ROOT=/tmp/node-socketio-chatroom-backups-ci \
+            bash -s <<'RUNTIME'
+          set -Eeuo pipefail
+          node /tmp/node-socketio-chatroom-ci/src/server.js > /tmp/chatroom-ci.log 2>&1 &
+          node_pid=$!
+          cleanup() {
+            if kill -0 "$node_pid" 2>/dev/null; then kill -KILL "$node_pid" 2>/dev/null || true; fi
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for _ in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:31888/readyz >/dev/null; then ready=1; break; fi
+            sleep 1
+          done
+          if [[ "$ready" != "1" ]]; then cat /tmp/chatroom-ci.log; exit 1; fi
+          curl --fail --silent http://127.0.0.1:31888/healthz
+
+          kill -TERM "$node_pid"
+          if ! wait "$node_pid"; then
+            status=$?
+            cat /tmp/chatroom-ci.log
+            echo "Installed runtime exited with status $status after SIGTERM" >&2
+            exit "$status"
+          fi
+          trap - EXIT
+
+          grep -q 'graceful shutdown completed' /tmp/chatroom-ci.log
+          if curl --fail --silent http://127.0.0.1:31888/healthz >/dev/null 2>&1; then
+            cat /tmp/chatroom-ci.log
+            exit 1
+          fi
+          test -f /tmp/node-socketio-chatroom-ci/data/state.json
+          RUNTIME
+      - name: Safe uninstall retains verified backup
+        run: |
+          sudo env \
+            CHATROOM_DIR=/tmp/node-socketio-chatroom-ci \
+            BACKUP_ROOT=/tmp/node-socketio-chatroom-backups-ci \
+            CHATROOM_SKIP_SERVICE=1 \
+            /tmp/node-socketio-chatroom-ci/scripts/uninstall.sh
+          test ! -e /tmp/node-socketio-chatroom-ci
+          mapfile -t archives < <(sudo find /tmp/node-socketio-chatroom-backups-ci -maxdepth 1 -name 'chatroom-backup-*.tar.gz' -print)
+          (( ${#archives[@]} >= 1 ))
+          archive="${archives[0]}"
+          sudo sha256sum --check "$archive.sha256"
+      - name: Failed service activation rolls back the new install
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          fake_bin=/tmp/chatroom-fake-systemctl
+          install_dir=/tmp/node-socketio-chatroom-ci-failure
+          backup_root=/tmp/node-socketio-chatroom-backups-ci-failure
+          service_name=node-socketio-chatroom-ci-failure.service
+          mkdir -p "$fake_bin"
+          cat > "$fake_bin/systemctl" <<'SYSTEMCTL'
+          #!/usr/bin/env bash
+          set -u
+          case "${1:-}" in
+            daemon-reload|disable|stop) exit 0 ;;
+            enable) exit 42 ;;
+            *) exit 0 ;;
+          esac
+          SYSTEMCTL
+          chmod +x "$fake_bin/systemctl"
+
+          set +e
+          sudo env \
+            PATH="$fake_bin:$PATH" \
+            INSTALL_DIR="$install_dir" \
+            BACKUP_ROOT="$backup_root" \
+            INSTALL_USER=chatroomci \
+            INSTALL_GROUP=chatroomci \
+            SERVICE_NAME="$service_name" \
+            PORT=31889 \
+            PUBLIC_ORIGIN=http://127.0.0.1:31889 \
+            ADMIN_PASSWORD='CI-Rollback-Password-123!' \
+            ./install.sh
+          status=$?
+          set -e
+
+          test "$status" -ne 0
+          test ! -e "$install_dir"
+          test ! -e "/etc/systemd/system/$service_name"
+
+  shell:
+    name: Shell + systemd safety
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+      - name: Parse shell scripts
+        run: bash -n install.sh menu.sh scripts/update.sh scripts/backup.sh scripts/restore.sh scripts/uninstall.sh
+      - name: ShellCheck
+        run: shellcheck install.sh menu.sh scripts/update.sh scripts/backup.sh scripts/restore.sh scripts/uninstall.sh
+      - name: Verify rendered systemd unit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p data public/uploads /tmp/node-socketio-chatroom-unit-backups
+          rendered=/tmp/node-socketio-chatroom.service
+          sed \
+            -e "s|@@USER@@|$(id -un)|g" \
+            -e "s|@@GROUP@@|$(id -gn)|g" \
+            -e "s|@@DIR@@|$PWD|g" \
+            -e "s|@@NODE@@|$(command -v node)|g" \
+            -e "s|@@BACKUP_ROOT@@|/tmp/node-socketio-chatroom-unit-backups|g" \
+            deploy/node-socketio-chatroom.service > "$rendered"
+          systemd-analyze verify "$rendered"

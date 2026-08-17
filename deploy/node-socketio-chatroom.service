@@ -1,0 +1,27 @@
+[Unit]
+Description=Node Socket.IO Chatroom
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@@USER@@
+Group=@@GROUP@@
+WorkingDirectory=@@DIR@@
+ExecStart=@@NODE@@ src/server.js
+Environment=NODE_ENV=production
+Environment=BACKUP_ROOT=@@BACKUP_ROOT@@
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=@@DIR@@/data @@DIR@@/public/uploads @@BACKUP_ROOT@@
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

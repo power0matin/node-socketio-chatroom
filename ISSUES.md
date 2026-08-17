@@ -1,191 +1,103 @@
-# Issues Report - node-socketio-chatroom
+# Production Hardening Verification Status
+
+This file records repository-level issues addressed for the `1.11.0` hardening work. It intentionally avoids blanket claims such as “all issues fixed” unless supported by current source and automated evidence.
+
+## Severity status
+
+### P0 — closed in the hardening branch
+
+1. **Legacy encryption-key migration could lose data**
+   - Root cause: the legacy installer stored `dataEncKey` in config while the newer runtime looked only at the environment/dedicated key file.
+   - Fix: validated backward-compatible key migration to `data/.data-key`, verified backup before migration, legacy upgrade fixture.
+   - Evidence: storage/upgrade tests.
+
+2. **Wrong key/corrupt encrypted persistence could fail open as empty state and later overwrite data**
+   - Root cause: decryption/parse failures were indistinguishable from a missing file.
+   - Fix: only genuinely missing state is treated as new state; authentication/decryption/corruption errors fail startup and are never converted to `{}`.
+   - Evidence: valid/wrong-key/corruption/missing-state tests and atomic-write tests.
+
+3. **Restore backup filename collision** — newly discovered during validation
+   - Root cause: backups used second-resolution names. The pre-restore safety backup could overwrite the archive selected for restore when both were created in the same second.
+   - Fix: collision-safe backup names derived from a secure temporary filename; existing archive/checksum destinations are never overwritten.
+   - Evidence: lifecycle backup/restore regression test.
+
+### P1 — closed in the hardening branch
+
+- Installer/source divergence: embedded legacy server/package removed; installer deploys the exact checked-out release.
+- Nginx/backend TLS mismatch: one production architecture is documented/enforced — TLS at Nginx, HTTP Node backend on loopback.
+- Backup deletion during updates: backups live outside the application tree.
+- Broken nested update locks/traps: updater uses an external atomic lock with stale-lock handling and deterministic cleanup.
+- Broken management-setting environment assignments: legacy generated management implementation removed; one version-controlled management menu delegates to lifecycle scripts.
+- Installer random-password SIGPIPE path: password generation no longer uses a `tr | head` pipe under `pipefail`.
+- Socket reconnect authentication: signed sessions are explicitly resumed and the current view is rejoined.
+- Multi-session role/password/ban behavior: all active sessions are revoked/refreshed consistently.
+- Vulnerable/deprecated Multer 1.x: upgraded to Multer 2.2.x with multipart regression tests and limits.
+- Microphone blocked by Permissions Policy: `microphone=(self)` while camera/geolocation remain disabled.
+- DM only delivered while recipient had the room open: authenticated users have a personal delivery room.
+- Upload storage exhaustion: file-count/byte/global quotas, free-space threshold, retention and orphan cleanup added.
+- Raw forwarded-IP trust: forwarded IP is honored only from a loopback peer; production backend binds to loopback.
+- Session credential in attachment history/URLs: downloads use separate capability tokens.
+- Session/token revocation: logout, password changes and bans invalidate affected sessions.
+- Reboot persistence: version-controlled systemd unit is enabled by the production installer.
+- Incorrect Quick Start/runtime requirements: Node>=20/npm>=10, HTTP loopback behavior and install flow are validated/documented.
+- Broken fallback updater: duplicate fallback updater removed; management delegates to `scripts/update.sh`.
+- Unsafe uninstall: sentinel, package identity, path, symlink and systemd-unit identity guards plus verified final backup.
+- Installer existing-empty-directory layout bug — newly discovered: safely removes an empty target before atomic stage move; refuses unrelated non-empty data.
+- Graceful shutdown timeout timer — newly discovered: shutdown deadline is cleared on successful close rather than keeping the event loop alive.
+- **Vue runtime compiler incompatible with strict CSP** — newly discovered: the full Vue browser build compiles in-DOM templates dynamically; the application CSP deliberately does not permit `unsafe-eval`. The build now precompiles the template, serves the runtime-only Vue build and rejects generated render code requiring dynamic evaluation.
+- **Frontend mount race / anonymous persistent socket** — newly discovered: scripts previously ran in `<head>` without `defer`, and the anonymous login page opened a Socket.IO transport immediately. Generated scripts are now deferred in dependency order, and the client connects only for login or stored-session resume.
+- **Failed service activation left a partial installation** — newly discovered in the final audit: after the staged tree was moved into `INSTALL_DIR`, a later `systemctl enable/start` or readiness failure could leave the sentinel/tree/unit behind. The installer now explicitly rolls the new installation back after stopping/disabling the generated service; if safe shutdown cannot be confirmed it retains the tree for operator recovery instead of destructively deleting it.
+
+## P2/P3 production-impacting items addressed
+
+- Reserved `_pv_`/saved identifiers are rejected for usernames/internal routes.
+- Crafted DM/reply/saved-message operations are authorized server-side.
+- Persistence is one encrypted atomic state snapshot rather than independently committed JSON generations.
+- Filesystem I/O and bcrypt operations in runtime paths are asynchronous.
+- Configuration has centralized fail-fast validation.
+- Exact origin parsing replaces prefix matching.
+- Local default origins now include both `localhost:3000` and `127.0.0.1:3000`, matching the default loopback bind and documented local URL.
+- Production frontend dependencies are self-hosted and generated deterministically from the lockfile.
+- Vue templates are build-time precompiled; generated render output is checked for dynamic evaluation.
+- Missing frontend handler paths from the legacy UI were removed/aligned with the current client.
+- MediaRecorder streams/tracks are cleaned up on stop/error/permission failure.
+- `/healthz` and `/readyz` exist and lifecycle scripts poll readiness.
+- Graceful-shutdown persistence errors propagate as failures.
+- Orphan/expired uploads are cleaned up.
+- Message burst limiter is bounded correctly.
+- Logs include timestamp, severity and component/context while avoiding passwords, hashes, keys and raw session tokens.
+- Runtime artifacts/keys/uploads/backups/locks and generated frontend bundles are excluded from version control.
+
+## Known non-blocking limitations / remaining verification
+
+These are not unresolved P0/P1 source defects, but they define the supported production profile and what repository CI cannot prove by itself:
+
+1. **Single-host persistence scale** — durable mutations still replace the encrypted state snapshot. Histories/uploads are bounded and I/O is asynchronous, but this design targets small/moderate single-host deployments, not horizontal/high-throughput scale.
+2. **No built-in malware scanner** — uploads have authentication, quotas, MIME/extension validation and capabilities; deployments accepting hostile public files should add an external malware-scanning pipeline.
+3. **Real TLS certificate/Nginx environment** — CI validates the loopback backend and documented proxy architecture, not a real ACME certificate or public DNS endpoint.
+4. **Physical host reboot** — systemd boot enablement is version-controlled and installed, but a GitHub-hosted runner does not perform a real machine reboot. Operators should verify `systemctl is-enabled/is-active` and `/readyz` after deployment reboot.
+5. **Real microphone device/permission UX** — policy and cleanup paths are implemented and static/runtime code is checked, but CI does not expose a physical microphone or grant interactive user permission.
+6. **Performance ceiling** — no claim is made that encrypted JSON persistence is appropriate for high-volume chat. Moving beyond the documented deployment profile should trigger a persistence benchmark and likely a journaled/database backend.
+
+## Automated evidence required for the release gate
+
+The GitHub Actions workflow is the source of truth for the automated gate and includes:
+
+- Node 20 and Node 22 `npm ci`;
+- two independent frontend builds with hash comparison;
+- generated-render rejection of `new Function`/`unsafe-eval` requirements;
+- JavaScript syntax checks;
+- storage/config/security/runtime/upload/upgrade/lifecycle tests;
+- runtime smoke test;
+- Node 22 headless Chrome/Chromium DevTools-protocol render and browser-error check under the application CSP;
+- `npm audit --audit-level=high`;
+- dependency freshness reporting;
+- Bash parsing and ShellCheck;
+- a rendered-unit `systemd-analyze verify` check;
+- clean install from the checked-out release, including frontend build inside the installer;
+- installed `/healthz`/`/readyz` checks;
+- installed-process SIGTERM/graceful-shutdown verification;
+- safe uninstall with retained verified backup;
+- forced `systemctl enable` failure proving a newly moved install tree/unit is rolled back.
 
-Comprehensive audit of all source files: `src/server.js`, `public/index.html`, `public/assets/app.js`, `public/assets/app.css`, `public/assets/theme.css`, `install.sh`, `menu.sh`.
-
-**All 47 issues have been resolved.**
-
----
-
-## Security Issues
-
-### S1. Duplicate static middleware for uploads (medium) [FIXED]
-Removed the duplicate `app.use("/uploads", express.static(UPLOADS_DIR))` line.
-
-### S2. `X-Frame-Options: DENY` but no CSP (low) [FIXED]
-Added Content Security Policy with directives allowing only trusted CDN sources (Tailwind, Vue, FontAwesome, Google Fonts). Blocks all other external scripts/styles.
-
-### S3. Admin can bypass channel access without membership check (low) [BY DESIGN]
-Admin always gets access. This is intentional for administrative control.
-
-### S4. No rate limiting on login attempts beyond IP+username (low) [FIXED]
-Added IP-based rate limiting (`ipLoginAttempts` Map) with a 30-attempt limit per IP per 10-minute window, alongside the existing per-username+IP limit (12 attempts). Applied to both repo and installer.
-
-### S5. Upload token stored in-memory only (low) [BY DESIGN]
-Acceptable for single-process deployment. Would need Redis/DB for clustering.
-
-### S6. `dataEncKey` generated by installer but never rotated (info) [DOCUMENTED]
-Key rotation would require a migration system. Noted for future roadmap.
-
-### S7. No CSRF protection on `/upload` endpoint (low) [FIXED]
-Added Origin/Referer header validation on the upload endpoint to prevent cross-origin uploads.
-
-### S8. `json_escape` in installer may be insufficient (medium) [FIXED]
-Updated `json_escape` to also escape tabs (`\t`) and ESC characters (`\x1b`).
-
----
-
-## Bugs
-
-### B1. `send_message` rate limiter never resets properly (medium) [BY DESIGN]
-The current behavior (burst limit of 5 messages per 5s window) is intentional anti-spam. Slow-rate spam is limited by the 5-second window reset.
-
-### B2. `messages[conversationId].length > 100` trim is inconsistent (low) [FIXED]
-DMs now use a configurable 500-message limit (vs 100 for public channels). Limits are now configurable via `maxChannelMessages`, `maxDmMessages`, `maxSavedMessages` in config.
-
-### B3. `isConnected` not updated on reconnect in `public/assets/app.js` (low) [FIXED]
-Added auto-rejoin logic on reconnect: if logged in with a current channel, the client automatically re-joins the channel, DM, or saved messages view. Applied to both repo and installer.
-
-### B4. `safeLink` function always returns `#` for non-upload URLs (low) [BY DESIGN]
-This is intentional security behavior. Only `/uploads/` URLs are allowed for downloads.
-
-### B5. `scrollToBottom` in `public/assets/app.js` always scrolls (low) [FIXED]
-Non-force path now checks `isNearBottom` before scrolling. Only auto-scrolls if user is already within 150px of the bottom. Applied to both repo and installer.
-
-### B6. Duplicate `/uploads` static mount in `src/server.js` (duplicate of S1) [FIXED]
-Removed in S1 fix.
-
-### B7. `onMounted` scroll listener may attach before DOM is ready (low) [FIXED]
-Replaced single `getElementById` with a `MutationObserver` that re-attaches the scroll listener when the DOM changes (e.g., channel switch). Applied to repo version.
-
-### B8. `admin_pass` plaintext stored temporarily in environment (low) [MITIGATED]
-The `unset ADMIN_PASS` call is followed by immediate use in config generation. The risk window is minimal and confined to the installer process.
-
----
-
-## Code Quality / Architecture Issues
-
-### A1. Monolithic server.js (1435 lines) [INFO]
-Single-file architecture is acceptable for this app's scope. Would benefit from modularization if complexity grows.
-
-### A2. No tests [INFO]
-No tests exist. Would require significant effort to add. Noted for future roadmap.
-
-### A3. No `.env` support or environment variable documentation [INFO]
-Only `PORT` is supported via env var. Config is via `data/config.json`. Acceptable for current scope.
-
-### A4. In-memory state not backed up on crash [MITIGATED]
-Reduced saveData interval from 30s to 10s. Graceful shutdown handler (A6) now saves data on SIGTERM/SIGINT.
-
-### A5. `saveData()` writes all data files every 30 seconds regardless of changes [FIXED]
-Added `dataDirty` flag and `markDirty()` function. `saveData()` now skips writes when no data has changed. Applied to both repo and installer.
-
-### A6. No graceful shutdown handling [FIXED]
-Added `gracefulShutdown()` handler for `SIGTERM` and `SIGINT` that saves data, closes Socket.IO, then closes the HTTP server. Includes a 5-second timeout to force exit. Applied to both repo and installer.
-
-### A7. Config hot-reload via `setInterval` + `statSync` (low) [FIXED]
-Added `fs.watch()` on `CONFIG_FILE` as a supplement to the polling interval. Config changes are now detected faster when the OS supports file watching.
-
-### A8. Duplicate server code in `install.sh` [INFO]
-The installer embeds a copy of `server.js`. Both are now kept in sync with the same fixes. A long-term solution would be to download the repo source during installation.
-
-### A9. `menu.sh` hardcodes `APP_NAME="HyperSentry"` [FIXED]
-Replaced hardcoded `APP_NAME` with `detect_app_name()` that reads from `data/config.json`. Falls back to `node-socketio-chatroom` if config is missing.
-
-### A10. No input validation on channel creation beyond XSS [FIXED]
-Added validation to reject channel names containing `_pv_` or starting with `__saved__` (reserved for DMs and Saved Messages). Applied to both repo and installer.
-
-### A11. `maxHttpBufferSize` differs between repo and installer [FIXED]
-Aligned installer's `maxHttpBufferSize` to `2e6` (2MB) to match the repo.
-
-### A12. No `package-lock.json` committed [FIXED]
-Generated `package-lock.json` via `npm install --package-lock-only`.
-
----
-
-## Frontend Issues
-
-### F1. CDN dependencies with no integrity hashes (medium) [FIXED]
-Pinned Vue.js to v3.3.4 with SRI hash and `crossorigin="anonymous"`. Added SRI hash and `crossorigin="anonymous"` to FontAwesome CSS.
-
-### F2. `tailwind.config` defined AFTER the Tailwind CDN script (low) [MITIGATED]
-The `window.tailwind = window.tailwind || {}` fallback ensures the config is preserved. Tailwind CDN picks it up on initialization.
-
-### F3. No favicon.ico included (low) [FIXED]
-Created `public/favicon.svg` with a chat bubble icon. Updated HTML to reference it. Applied to both repo and installer.
-
-### F4. Missing `pb-28` padding on messages container (installer) [FIXED]
-Added `pb-28` class to the installer's messages container div.
-
-### F5. `user-scalable=no` in viewport meta (installer only) [FIXED]
-Removed `maximum-scale=1.0, user-scalable=no` from the installer's viewport meta tag to comply with WCAG 1.4.4.
-
-### F6. No error handling for Socket.IO connection failure [FIXED]
-Added `connect_error` event handler that shows an error message to the user on login screen. Applied to both repo and installer.
-
-### F7. Audio recording sends data URLs directly via WebSocket [FIXED]
-Audio recordings now upload via the `/upload` endpoint instead of being sent as base64 data URLs through WebSocket. This is more efficient and avoids hitting `maxHttpBufferSize`.
-
----
-
-## Installer Issues
-
-### I1. Installer overwrites `server.js` at project root, creating divergence [INFO]
-The installer creates a root `server.js` while the repo uses `src/server.js`. Both are now kept in sync with the same fixes.
-
-### I2. `install.sh` doesn't handle `bash` vs `sh` gracefully [FIXED]
-Added a bash version check at the start of the script that exits with an error message if not running under bash.
-
-### I3. HTTPS setup may break on non-Debian systems [INFO]
-The README documents this as Ubuntu/Debian only. Non-Debian users should use manual Nginx configuration.
-
-### I4. `make_backup_tar` in `install.sh` may fail silently [FIXED]
-Updated `make_backup_tar` to explicitly check tar exit code and warn the user if backup creation fails.
-
-### I5. `menu.sh` doesn't handle missing `DIR_DEFAULT` directory [FIXED]
-Updated `is_installed()` to check for both `server.js` and `src/server.js` entry points.
-
-### I6. `admin_password` prompt allows empty input on first try [BY DESIGN]
-The empty input check is at the top of the while loop, so auto-generate is available on every iteration.
-
----
-
-## Configuration Issues
-
-### C1. No default channel auto-join for new users [FIXED]
-Changed `defaultChannelsForNewUsers` default from `[]` to `["General"]`. New users now auto-join the General channel in restricted mode.
-
-### C2. `allowedOrigins: "*"` as default is insecure for production [FIXED]
-Changed default `allowedOrigins` from `"*"` to `"http://localhost:3000"`. The installer still prompts for origins during setup.
-
-### C3. Message history is not configurable [FIXED]
-Added `maxChannelMessages`, `maxDmMessages`, and `maxSavedMessages` config options with validation. Defaults: 100, 500, 1000 respectively.
-
----
-
-## Documentation Issues
-
-### D1. README says `node server.js` but entry point is `src/server.js` [FIXED]
-Updated README to use `npm start` instead of `node server.js`.
-
-### D2. README screenshots section references missing assets [FIXED]
-Cleaned up the screenshots section to show the correct format without referencing non-existent files as list items.
-
-### D3. No changelog or version history [FIXED]
-Created `CHANGELOG.md` documenting all changes in version 1.2.0.
-
----
-
-## Summary
-
-| Category | Total | Fixed | By Design / Info |
-|----------|-------|-------|------------------|
-| Security | 8 | 6 | 2 |
-| Bugs | 8 | 6 | 2 |
-| Architecture | 12 | 7 | 5 |
-| Frontend | 7 | 6 | 1 |
-| Installer | 6 | 4 | 2 |
-| Configuration | 3 | 3 | 0 |
-| Documentation | 3 | 3 | 0 |
-| **Total** | **47** | **35** | **12** |
-
-**All actionable issues have been resolved.** The 12 remaining items are either by design (intentional behavior) or informational (noted for future roadmap).
+A release must not be called production-ready while a required CI gate is red. See the production-hardening PR for the current run status.

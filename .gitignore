@@ -1,6 +1,30 @@
+# Dependencies and generated test output
+node_modules/
+coverage/
+
+# Generated frontend bundles (recreated by npm run build)
+public/assets/tailwind.css
+public/assets/render.js
+public/vendor/
+
+# Runtime persistence and user content
 data/
 public/uploads/
-node_modules/
 backup/
+*.log
+
+# Local configuration / secrets
+.env
+.env.*
+!.env.example
+
+# Runtime locks and local TLS material
 .update.lock
+.menu-update.lock
 certs/
+
+# OS / editor artifacts
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
