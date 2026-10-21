@@ -135,7 +135,6 @@ async function main() {
     ? path.join(root, 'node_modules', '.bin', 'tailwindcss.cmd')
     : path.join(root, 'node_modules', '.bin', 'tailwindcss');
   execFileSync(tailwindBin, [
-    '-c', path.join(root, 'tailwind.config.js'),
     '-i', path.join(root, 'src', 'styles.css'),
     '-o', path.join(publicDir, 'assets', 'tailwind.css'),
     '--minify',
