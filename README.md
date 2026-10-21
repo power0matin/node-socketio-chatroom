@@ -1,4 +1,4 @@
-# Node Socket.IO Chatroom
+<h1 align="center">Node Socket.IO Chatroom</h1>
 
 <!-- repo-badges:start -->
 <p align="center">
@@ -381,3 +381,33 @@ If uploads return `401`, the browser session may be invalid/revoked. If they ret
 ## License
 
 See [LICENSE](./LICENSE).
+
+## Contact
+
+**Matin Shahabadi**
+
+- Website: [matinshahabadi.ir](https://matinshahabadi.ir)
+- Email: [me@matinshahabadi.ir](mailto:me@matinshahabadi.ir)
+- GitHub: [power0matin](https://github.com/power0matin)
+- LinkedIn: [matin-shahabadi](https://www.linkedin.com/in/matin-shahabadi)
+
+<p align="center">
+  <b>If this helped you, consider giving it a star!</b><br>
+  <sub>Your support keeps the project alive and helps others find it.</sub>
+</p>
+
+<!-- Copy-paste in your Readme.md file -->
+<p align="center">
+  <a href="https://next.ossinsight.io/widgets/official/analyze-repo-stars-history?repo_id=1162700869" target="_blank" style="display: block" align="center">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://next.ossinsight.io/widgets/official/analyze-repo-stars-history/thumbnail.png?repo_id=1162700869&amp;image_size=auto&amp;color_scheme=dark" width="721" height="auto">
+      <img alt="Star History of power0matin/node-socketio-chatroom" src="https://next.ossinsight.io/widgets/official/analyze-repo-stars-history/thumbnail.png?repo_id=1162700869&amp;image_size=auto&amp;color_scheme=light" width="721" height="auto">
+    </picture>
+  </a>
+</p>
+
+<!-- Made with [OSS Insight](https://ossinsight.io/) -->
+
+<p align="center">
+  Created by <a href="https://github.com/power0matin">power0matin</a>
+</p>
