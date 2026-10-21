@@ -33,5 +33,11 @@
     "socket.io-client": "^4.8.3",
     "tailwindcss": "^3.4.17",
     "vue": "^3.5.13"
+  },
+  "overrides": {
+    "engine.io": "6.6.10",
+    "multer": "2.4.0",
+    "proxy-addr": "2.0.8",
+    "qs": "6.16.1"
   }
 }
