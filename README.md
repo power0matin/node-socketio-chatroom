@@ -46,6 +46,12 @@ Production installer:
 
 The installer does not bootstrap an old embedded copy of the application. It installs the exact checked-out release tree and uses `package-lock.json` with `npm ci`.
 
+## Development dependency security
+
+The upstream `braces` package currently has no release that fixes [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm). Tailwind's build-time file watcher uses it indirectly through `micromatch`. Until an official upstream fix is published, the lockfile aliases this development-only dependency to the MIT-licensed `@dieub/braces-depth-guard@3.0.3-pn.2` backport, which rejects brace patterns deeper than 100 levels while retaining the existing expansion API. A regression test checks the exact package identity, normal expansion behavior, and rejection of deeply nested patterns.
+
+This is a scoped third-party mitigation, not an official `braces` release. Keep the regression test and security audit enabled, and replace the backport with a reviewed official fix when one becomes available.
+
 ## Quick start for local development
 
 ```bash
